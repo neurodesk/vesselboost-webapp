@@ -20,7 +20,7 @@ try {
   importScripts('../preprocessing-wasm/preprocessing.js');
   wasmPreprocessingAvailable = true;
 } catch (e) {
-  // Preprocessing WASM not available - will skip bias correction and denoising
+  console.warn('Preprocessing WASM import failed:', e);
 }
 
 // ==================== Message Helpers ====================
