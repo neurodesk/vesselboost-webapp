@@ -1,0 +1,29 @@
+# WASM files (downloaded by setup.sh)
+web/wasm/
+
+# Built preprocessing WASM (built from rust-preprocessing/)
+web/preprocessing-wasm/
+
+# Model files
+# web/models/*.onnx
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary model weights
+.tmp_weights/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# Rust
+rust-preprocessing/target/
+rust-preprocessing/pkg/

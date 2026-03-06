@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: true
+
+jobs:
+  release:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version from commit messages
+        id: next_version
+        run: |
+          CURRENT="$(bash scripts/get_version.sh)"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          if [[ -z "${MAJOR}" || -z "${MINOR}" || -z "${PATCH}" ]]; then
+            echo "VERSION must be semantic version x.y.z; got '${CURRENT}'"
+            exit 1
+          fi
+
+          LATEST_TAG="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)"
+          LATEST_TAG_VERSION="${LATEST_TAG#v}"
+          BASE_VERSION="$CURRENT"
+          if [[ -n "$LATEST_TAG" ]]; then
+            HIGHEST_VERSION="$(printf '%s\n%s\n' "$CURRENT" "$LATEST_TAG_VERSION" | sort -V | tail -n1)"
+            BASE_VERSION="$HIGHEST_VERSION"
+          fi
+          IFS='.' read -r BASE_MAJOR BASE_MINOR BASE_PATCH <<< "$BASE_VERSION"
+
+          NEXT="${BASE_MAJOR}.${BASE_MINOR}.$((BASE_PATCH + 1))"
+
+          TAG="v${NEXT}"
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "base=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Current version: ${CURRENT}"
+          echo "Latest tag: ${LATEST_TAG:-none}"
+          echo "Base version: ${BASE_VERSION}"
+          echo "Next version: ${NEXT}"
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          TAG="${{ steps.next_version.outputs.tag }}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${TAG} already exists on origin."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump config version, commit, tag, and push
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          NEXT="${{ steps.next_version.outputs.version }}"
+          TAG="${{ steps.next_version.outputs.tag }}"
+
+          sed -i -E "s/^export const VERSION = '[^']+';$/export const VERSION = '${NEXT}';/" web/js/app/config.js
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/js/app/config.js
+
+          if git diff --cached --quiet; then
+            echo "Config version already set to ${NEXT}; tagging current commit."
+          else
+            git commit -m "chore(release): bump version to ${TAG}"
+          fi
+
+          git tag "${TAG}"
+          git push origin HEAD:main
+          git push origin "${TAG}"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.next_version.outputs.tag }}"
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; updating metadata."
+            gh release edit "$TAG" --title "$TAG" --latest
+          else
+            echo "Creating release ${TAG}."
+            gh release create "$TAG" --generate-notes --title "$TAG" --latest
+          fi
+
+      - name: Trigger deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy-pages.yml --ref main

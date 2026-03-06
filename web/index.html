@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VesselBoost - Blood Vessel Segmentation</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="app-container">
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="logo">
+      <h1>VesselBoost</h1>
+      <span>Blood Vessel Segmentation</span>
+      <span class="version" id="appVersion"></span>
+    </div>
+    <div class="header-links">
+      <button class="header-link" id="aboutButton" title="About">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <span>About</span>
+      </button>
+      <button class="header-link" id="citationsButton" title="Citations">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>Cite</span>
+      </button>
+      <button class="header-link" id="privacyButton" title="Privacy">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Privacy</span>
+      </button>
+      <a href="https://github.com/neurodesk/vesselboost-webapp" target="_blank" rel="noopener noreferrer" class="header-link" title="GitHub">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="white"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="app-sidebar">
+    <div class="sidebar-scroll">
+
+      <!-- Input Section -->
+      <section class="sidebar-section">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Input
+        </h2>
+        <div class="section-content">
+          <!-- Input mode tabs -->
+          <div class="input-mode-tabs">
+            <button class="input-mode-tab active" data-mode="dicom">DICOM</button>
+            <button class="input-mode-tab" data-mode="nifti">NIfTI</button>
+          </div>
+
+          <!-- DICOM mode -->
+          <div class="input-mode-content active" id="dicomMode">
+            <div class="file-upload-group">
+              <div class="upload-group">
+                <div class="file-upload-zone file-drop" id="dicomDropZone">
+                  <input type="file" id="dicomInput" webkitdirectory multiple>
+                  <svg class="upload-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <p class="upload-text file-drop-label"><span>Drop DICOM folder or click</span></p>
+                </div>
+                <div class="file-list" id="dicomList"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- NIfTI mode -->
+          <div class="input-mode-content" id="niftiMode">
+            <div class="file-upload-group">
+              <div class="upload-group">
+                <div class="file-upload-zone file-drop" id="niftiDropZone">
+                  <input type="file" id="niftiInput" accept=".nii,.nii.gz">
+                  <svg class="upload-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <p class="upload-text file-drop-label"><span>Drop NIfTI or click</span></p>
+                </div>
+                <div class="file-list" id="niftiList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Inference Settings -->
+      <section class="sidebar-section">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Inference Settings
+        </h2>
+        <div class="section-content">
+          <!-- Target Spacing -->
+          <div class="param-group">
+            <label class="param-label" for="spacingInput">Target Spacing (mm) <span class="info-icon">i<span class="info-tooltip">Isotropic target voxel size for resampling. Smaller values preserve more detail but increase computation time.</span></span></label>
+            <input type="number" id="spacingInput" value="0.3" min="0.1" max="1.0" step="0.05">
+          </div>
+          <!-- Overlap -->
+          <div class="param-group">
+            <label class="param-label" for="overlapSelect">Sliding Window Overlap <span class="info-icon">i<span class="info-tooltip">Higher overlap improves segmentation quality but takes longer. 50% is fast, 90% produces the highest quality.</span></span></label>
+            <select id="overlapSelect">
+              <option value="0.5" selected>50% (Fast)</option>
+              <option value="0.75">75% (Balanced)</option>
+              <option value="0.9">90% (High Quality)</option>
+            </select>
+          </div>
+          <!-- Probability Threshold -->
+          <div class="param-group">
+            <label class="param-label" for="thresholdInput">Probability Threshold <span class="info-icon">i<span class="info-tooltip">Minimum probability to classify a voxel as vessel. Lower values detect more vessels but may include false positives.</span></span></label>
+            <input type="number" id="thresholdInput" value="0.1" min="0.01" max="0.5" step="0.01">
+          </div>
+          <!-- Min Component Size -->
+          <div class="param-group">
+            <label class="param-label" for="minSizeInput">Min Component Size <span class="info-icon">i<span class="info-tooltip">Connected components with fewer voxels than this are removed as noise.</span></span></label>
+            <input type="number" id="minSizeInput" value="10" min="1" max="1000" step="1">
+          </div>
+          <!-- WebGPU Toggle -->
+          <div class="param-group hidden" id="webgpuGroup">
+            <label class="viewer-checkbox">
+              <input type="checkbox" id="webgpuToggle" checked>
+              <span>Use WebGPU <span class="info-icon">i<span class="info-tooltip">When enabled, uses GPU acceleration via WebGPU. Disable to force CPU (WASM) with maximum threads.</span></span></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Preprocessing Settings -->
+      <section class="sidebar-section">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Preprocessing
+        </h2>
+        <div class="section-content">
+          <div class="param-group">
+            <label class="viewer-checkbox">
+              <input type="checkbox" id="biasCorrToggle" checked>
+              <span>Bias Field Correction (N4ITK) <span class="info-icon">i<span class="info-tooltip">Corrects intensity inhomogeneity in MRI images using N4ITK algorithm. Recommended for raw MRI data.</span></span></span>
+            </label>
+          </div>
+          <div class="param-group">
+            <label class="viewer-checkbox">
+              <input type="checkbox" id="denoiseToggle" checked>
+              <span>Denoising (NLM) <span class="info-icon">i<span class="info-tooltip">Non-local means denoising to reduce noise while preserving vessel structures.</span></span></span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Run Section -->
+      <section class="sidebar-section">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run
+        </h2>
+        <div class="section-content">
+          <button class="btn btn-primary" id="runSegmentation" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Run Segmentation
+          </button>
+        </div>
+      </section>
+
+      <!-- Results Section -->
+      <section class="sidebar-section hidden" id="resultsSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Results
+        </h2>
+        <div class="section-content">
+          <div class="stage-buttons-grid" id="stageButtons"></div>
+          <button class="btn btn-secondary btn-sm" id="clearResults" style="width: 100%; margin-top: var(--space-sm);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Clear All
+          </button>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Status bar -->
+    <div class="sidebar-status">
+      <div class="status-header">
+        <span class="status-label">Status</span>
+        <div class="status-right">
+          <span class="status-value" id="statusText">Ready</span>
+          <button class="btn-status-cancel" id="cancelButton" title="Cancel segmentation" disabled>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressBar" style="width: 0%"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="app-main">
+    <!-- Viewer toolbar -->
+    <div class="viewer-toolbar">
+      <div class="view-tabs">
+        <button class="view-tab active" data-view="multiplanar">3-Plane</button>
+        <button class="view-tab" data-view="axial">Axial</button>
+        <button class="view-tab" data-view="coronal">Coronal</button>
+        <button class="view-tab" data-view="sagittal">Sagittal</button>
+        <button class="view-tab" data-view="render">3D</button>
+      </div>
+
+      <div class="viewer-actions">
+        <!-- Window/Range Controls -->
+        <div class="window-controls">
+          <input type="number" id="windowMin" class="window-input" placeholder="min" step="any" title="Window minimum">
+          <div class="range-slider-container">
+            <input type="range" id="rangeMin" class="range-slider range-min" min="0" max="100" value="0">
+            <input type="range" id="rangeMax" class="range-slider range-max" min="0" max="100" value="100">
+            <div class="range-track"></div>
+            <div class="range-selected" id="rangeSelected"></div>
+          </div>
+          <input type="number" id="windowMax" class="window-input" placeholder="max" step="any" title="Window maximum">
+          <button class="btn btn-sm" id="resetWindow" title="Reset to full range">Auto</button>
+        </div>
+
+        <!-- Overlay opacity -->
+        <div class="opacity-control hidden" id="overlayControl">
+          <label>Overlay</label>
+          <input type="range" id="overlayOpacity" min="0" max="1" step="0.05" value="0.5">
+          <span id="overlayOpacityValue">50%</span>
+        </div>
+
+        <!-- Interpolation -->
+        <label class="viewer-checkbox">
+          <input type="checkbox" id="interpolation">
+          <span>Interp</span>
+        </label>
+
+        <!-- Colorbar -->
+        <label class="viewer-checkbox">
+          <input type="checkbox" id="colorbarToggle">
+          <span>Colorbar</span>
+        </label>
+
+        <!-- Crosshair -->
+        <label class="viewer-checkbox">
+          <input type="checkbox" id="crosshairToggle" checked>
+          <span>Crosshair</span>
+        </label>
+
+        <!-- Colormap -->
+        <select class="colormap-select" id="colormapSelect">
+          <option value="gray">Gray</option>
+          <option value="hot">Hot</option>
+          <option value="cool">Cool</option>
+          <option value="viridis">Viridis</option>
+          <option value="plasma">Plasma</option>
+        </select>
+
+        <!-- Download -->
+        <button class="btn btn-sm btn-icon" id="downloadCurrentVolume" title="Download current image as NIfTI" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+
+        <!-- Screenshot -->
+        <button class="btn btn-sm btn-icon" id="screenshotViewer" title="Save screenshot as PNG">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- NiiVue canvas -->
+    <div class="viewer-canvas-wrapper">
+      <canvas id="gl1"></canvas>
+    </div>
+
+    <!-- Intensity info -->
+    <div class="viewer-info">
+      <span class="viewer-info-primary" id="viewerInfoPrimary"></span>
+      <span class="viewer-info-label" id="viewerInfoLabel"></span>
+    </div>
+
+    <!-- Console -->
+    <div class="console-container">
+      <div class="console-header">
+        <span class="console-title">Console</span>
+        <button class="console-clear" id="copyConsole" title="Copy to clipboard">Copy</button>
+        <button class="console-clear" id="clearConsole">Clear</button>
+      </div>
+      <div class="console-output" id="consoleOutput"></div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <span>VesselBoost <span id="footerVersion"></span></span>
+    <span>All processing happens locally in your browser. No data is uploaded.</span>
+    <a href="https://github.com/neurodesk/vesselboost-webapp" target="_blank" style="color: var(--color-text-dim);">GitHub</a>
+  </footer>
+
+</div>
+
+<!-- About Modal -->
+<div class="modal-overlay" id="aboutModal">
+  <div class="modal about-modal">
+    <div class="modal-header">
+      <h3>About VesselBoost</h3>
+      <button class="modal-close" id="closeAbout">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="about-highlight">
+        <div>
+          <strong>VesselBoost</strong>
+          <p>Blood vessel segmentation in the browser</p>
+        </div>
+      </div>
+
+      <p>VesselBoost is a browser-based tool for automatic segmentation of blood vessels from MRI angiography using a 3D UNet model.</p>
+      <p>All computation runs locally in your browser using ONNX Runtime Web. No data is uploaded to any server.</p>
+
+      <h4>Version</h4>
+      <div class="about-version-table">
+        <div class="about-version-row">
+          <span class="about-version-label">VesselBoost</span>
+          <span class="about-version-value" id="aboutAppVersion"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Privacy Modal -->
+<div class="modal-overlay" id="privacyModal">
+  <div class="modal privacy-modal">
+    <div class="modal-header">
+      <h3>Privacy</h3>
+      <button class="modal-close" id="closePrivacy">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="privacy-highlight">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <div>
+          <strong>Your data never leaves your device.</strong>
+          <p>VesselBoost runs entirely in your web browser using WebAssembly and ONNX Runtime. All processing occurs locally on your machine.</p>
+        </div>
+      </div>
+
+      <h4>What this means</h4>
+      <ul class="privacy-list">
+        <li>No data is uploaded to any server or cloud service</li>
+        <li>No internet connection is required after the page loads</li>
+        <li>Sensitive patient data remains on your computer at all times</li>
+        <li>There is no need to anonymise or de-identify your data before use</li>
+      </ul>
+
+      <h4>How it works</h4>
+      <p>VesselBoost uses ONNX Runtime Web to run deep learning models directly in the browser via WebAssembly. Your NIfTI or DICOM files are read into browser memory, processed locally, and results are displayed without any network transfer.</p>
+
+      <h4>Third-party services</h4>
+      <p>VesselBoost does not use analytics, tracking, cookies, or any external services. The only network requests are loading the application itself and downloading model files (which are cached locally).</p>
+    </div>
+  </div>
+</div>
+
+<!-- Citations Modal -->
+<div class="modal-overlay" id="citationsModal">
+  <div class="modal citations-modal">
+    <div class="modal-header">
+      <h3>Citations</h3>
+      <button class="modal-close" id="closeCitations">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="citation-section citation-primary">
+        <div class="citation-item">
+          <strong>VesselBoost</strong>
+          <span class="citation-ref">Code: <a href="https://github.com/KMarshallX/VesselBoost/" target="_blank" rel="noopener">GitHub</a></span>
+          <p>Marshall K, et al. VesselBoost: A Python Toolbox for Small Blood Vessel Segmentation.</p>
+          <a href="https://github.com/KMarshallX/VesselBoost/" target="_blank" rel="noopener">https://github.com/KMarshallX/VesselBoost/</a>
+        </div>
+      </div>
+
+      <p class="citations-intro">VesselBoost uses the following methods and tools:</p>
+
+      <div class="citation-section">
+        <h4>Deep Learning Framework</h4>
+        <div class="citation-item">
+          <strong>PyTorch</strong>
+          <p>Paszke A, et al. PyTorch: An Imperative Style, High-Performance Deep Learning Library. NeurIPS 2019.</p>
+          <a href="https://pytorch.org" target="_blank" rel="noopener">https://pytorch.org</a>
+        </div>
+      </div>
+
+      <div class="citation-section">
+        <h4>Browser Inference</h4>
+        <div class="citation-item">
+          <strong>ONNX Runtime Web</strong>
+          <p>Microsoft. ONNX Runtime: cross-platform, high performance ML inferencing and training accelerator.</p>
+          <a href="https://onnxruntime.ai" target="_blank" rel="noopener">https://onnxruntime.ai</a>
+        </div>
+      </div>
+
+      <div class="citation-section">
+        <h4>Visualization</h4>
+        <div class="citation-item">
+          <strong>NiiVue</strong>
+          <p>NiiVue Contributors. NiiVue: a WebGL2 medical image viewer.</p>
+          <a href="https://github.com/niivue/niivue" target="_blank" rel="noopener">https://github.com/niivue/niivue</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Section toggle function -->
+<script>
+function toggleSection(section) {
+  section.classList.toggle('collapsed');
+}
+</script>
+
+<!-- COOP/COEP service worker for cross-origin isolation (enables multi-threaded WASM) -->
+<script src="coi-serviceworker.js"></script>
+
+<!-- NiiVue -->
+<script src="https://unpkg.com/@niivue/niivue@0.44.0/dist/niivue.umd.js"></script>
+
+<!-- Main app -->
+<script type="module" src="js/vesselboost-app.js"></script>
+
+</body>
+</html>
