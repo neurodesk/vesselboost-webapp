@@ -833,10 +833,6 @@ async function runInference(config) {
     postProgress(0.06, 'Brain extraction (BET)...');
     postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
     try {
-      // BET expects Float64 input
-      const f64Data = new Float64Array(currentData.length);
-      for (let i = 0; i < currentData.length; i++) f64Data[i] = currentData[i];
-
       const progressCb = (current, total) => {
         const pct = Math.round((current / total) * 100);
         if (pct % 10 === 0) {
@@ -844,8 +840,9 @@ async function runInference(config) {
         }
       };
 
+      // Pass Float32 directly - Rust converts to f64 internally
       brainMask = wasm_bindgen.bet_brain_extract(
-        f64Data,
+        currentData,
         currentDims[0], currentDims[1], currentDims[2],
         currentSpacing[0], currentSpacing[1], currentSpacing[2],
         fractionalIntensity,

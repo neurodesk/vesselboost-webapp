@@ -66,8 +66,11 @@ pub fn nlm_denoise(
 
 /// BET brain extraction (FSL-BET2 algorithm via qsm-core).
 ///
+/// Accepts Float32 input and converts to Float64 internally to avoid
+/// doubling memory usage on the JS side.
+///
 /// # Arguments
-/// * `data` - Flattened Float64 magnitude volume data
+/// * `data` - Flattened Float32 magnitude volume data
 /// * `nx`, `ny`, `nz` - Volume dimensions
 /// * `vsx`, `vsy`, `vsz` - Voxel sizes in mm
 /// * `fractional_intensity` - Intensity threshold (0.0-1.0, smaller = larger brain, default: 0.5)
@@ -77,22 +80,24 @@ pub fn nlm_denoise(
 /// Binary mask as Uint8Array (1 = brain, 0 = background)
 #[wasm_bindgen]
 pub fn bet_brain_extract(
-    data: &[f64],
+    data: &[f32],
     nx: u32,
     ny: u32,
     nz: u32,
-    vsx: f64,
-    vsy: f64,
-    vsz: f64,
-    fractional_intensity: f64,
+    vsx: f32,
+    vsy: f32,
+    vsz: f32,
+    fractional_intensity: f32,
     progress_callback: &js_sys::Function,
 ) -> Vec<u8> {
+    // Convert f32 -> f64 inside WASM to avoid JS-side Float64Array allocation
+    let f64_data: Vec<f64> = data.iter().map(|&v| v as f64).collect();
     let callback = progress_callback.clone();
     let mask = qsm_core::bet::run_bet_with_progress(
-        data,
+        &f64_data,
         nx as usize, ny as usize, nz as usize,
-        vsx, vsy, vsz,
-        fractional_intensity,
+        vsx as f64, vsy as f64, vsz as f64,
+        fractional_intensity as f64,
         1.0,  // smoothness_factor (FSL default)
         0.0,  // gradient_threshold (FSL default)
         1000, // iterations
