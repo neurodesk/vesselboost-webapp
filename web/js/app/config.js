@@ -11,13 +11,13 @@ export const MODEL = {
 };
 
 export const INFERENCE_DEFAULTS = {
-  targetSpacing: [0.7, 0.7, 0.7],
+  targetSpacing: [0.5, 0.5, 0.5],
   cropForegroundMargin: 20,
   overlap: 0.5,
   probabilityThreshold: 0.1,
   minComponentSize: 10,
   biasCorrection: true,
-  denoising: true,
+  denoising: false,
   fractionalIntensity: 0.5
 };
 
