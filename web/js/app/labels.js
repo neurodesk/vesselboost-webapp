@@ -19,12 +19,13 @@ export function generateNiivueColormap() {
   const B = new Array(size).fill(0);
   const A = new Array(size).fill(0);
 
-  // Background: transparent
-  // Vessel (index 1): red
-  R[1] = 255;
-  G[1] = 50;
-  B[1] = 50;
-  A[1] = 255;
+  // NiiVue maps voxel values through the LUT linearly:
+  // voxel 0 (cal_min) -> index 0, voxel 1 (cal_max) -> index 255
+  // So vessel (value=1) maps to the last index (255)
+  R[255] = 255;
+  G[255] = 50;
+  B[255] = 50;
+  A[255] = 255;
 
   return { R, G, B, A, min: 0, max: 1 };
 }

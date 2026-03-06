@@ -42,7 +42,7 @@ export class ViewerController {
     }
   }
 
-  async loadOverlay(file, colormap = 'vesselboost', opacity = 0.5) {
+  async loadOverlay(file, colormap = 'red', opacity = 0.5) {
     try {
       const url = URL.createObjectURL(file);
       await this.nv.addVolumeFromUrl({ url: url, name: file.name, colormap: colormap });

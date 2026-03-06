@@ -96,6 +96,7 @@ vesselboost-webapp/
 If you use VesselBoost, please cite:
 
 - **VesselBoost**: Marshall K, et al. VesselBoost: A Python Toolbox for Small Blood Vessel Segmentation. [GitHub](https://github.com/KMarshallX/VesselBoost/)
+- **dcm2niix**: Li X, Morgan PS, Ashburner J, Smith J, Rorden C. The first step for neuroimaging data analysis: DICOM to NIfTI conversion. J Neurosci Methods. 2016;264:47-56. [GitHub](https://github.com/rordenlab/dcm2niix)
 - **ONNX Runtime Web**: Microsoft. [onnxruntime.ai](https://onnxruntime.ai)
 - **NiiVue**: NiiVue Contributors. [github.com/niivue/niivue](https://github.com/niivue/niivue)
 

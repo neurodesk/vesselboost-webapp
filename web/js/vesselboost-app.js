@@ -676,7 +676,7 @@ class VesselBoostApp {
     const fullResult = this.inferenceExecutor.getResult('segmentation');
     const overlayFile = fullResult?.file;
     if (overlayFile && this.inputFile) {
-      this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'vesselboost').then(() => {
+      this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'red').then(() => {
         this.syncWindowControls();
       });
     }
