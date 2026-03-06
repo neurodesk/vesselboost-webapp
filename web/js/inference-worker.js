@@ -206,6 +206,52 @@ function createOutputNifti(uint8Data, sourceHeader, dims) {
   return buffer;
 }
 
+function createFloat32Nifti(float32Data, sourceHeader, dims, spacing) {
+  const srcView = new DataView(sourceHeader);
+  const voxOffset = srcView.getFloat32(108, true);
+  const headerSize = Math.ceil(voxOffset);
+
+  const dataBytes = float32Data.length * 4;
+  const buffer = new ArrayBuffer(headerSize + dataBytes);
+  const destBytes = new Uint8Array(buffer);
+  const destView = new DataView(buffer);
+
+  destBytes.set(new Uint8Array(sourceHeader).slice(0, headerSize));
+
+  // Set datatype to FLOAT32
+  destView.setInt16(70, 16, true);
+  destView.setInt16(72, 32, true);
+
+  if (dims) {
+    destView.setInt16(40, 3, true);
+    destView.setInt16(42, dims[0], true);
+    destView.setInt16(44, dims[1], true);
+    destView.setInt16(46, dims[2], true);
+    destView.setInt16(48, 1, true);
+  }
+
+  if (spacing) {
+    destView.setFloat32(80, spacing[0], true);  // pixdim[1]
+    destView.setFloat32(84, spacing[1], true);  // pixdim[2]
+    destView.setFloat32(88, spacing[2], true);  // pixdim[3]
+  }
+
+  destView.setFloat32(112, 1, true);  // scl_slope
+  destView.setFloat32(116, 0, true);  // scl_inter
+
+  // cal_min/cal_max: auto range
+  let minVal = Infinity, maxVal = -Infinity;
+  for (let i = 0; i < float32Data.length; i++) {
+    if (float32Data[i] < minVal) minVal = float32Data[i];
+    if (float32Data[i] > maxVal) maxVal = float32Data[i];
+  }
+  destView.setFloat32(124, maxVal, true);  // cal_max
+  destView.setFloat32(128, minVal, true);  // cal_min
+
+  new Uint8Array(buffer, headerSize).set(new Uint8Array(float32Data.buffer, float32Data.byteOffset, dataBytes));
+  return buffer;
+}
+
 // ==================== Preprocessing ====================
 
 function getOrientationTransform(affine) {
@@ -792,6 +838,10 @@ async function runInference(config) {
       }
       const coverage = (100 * maskCount / currentData.length).toFixed(1);
       postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
+
+      // Emit brain-extracted volume as stage
+      const betNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+      postStageData('bet', betNifti, 'Brain extraction (BET)');
     } catch (e) {
       postLog(`Warning: Brain extraction failed: ${e.message}`);
       brainMask = null;
@@ -828,6 +878,10 @@ async function runInference(config) {
         );
         currentData = corrected;
         postLog('Bias field correction complete');
+
+        // Emit bias-corrected volume as stage
+        const n4Nifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+        postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
       } catch (e) {
         postLog(`Warning: Bias correction failed: ${e.message}`);
       }
@@ -843,6 +897,10 @@ async function runInference(config) {
         );
         currentData = denoised;
         postLog('Denoising complete');
+
+        // Emit denoised volume as stage
+        const nlmNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+        postStageData('nlm', nlmNifti, 'Denoising (NLM)');
       } catch (e) {
         postLog(`Warning: Denoising failed: ${e.message}`);
       }

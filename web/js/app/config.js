@@ -38,6 +38,9 @@ export const PROGRESS_CONFIG = {
 
 export const STAGE_NAMES = {
   'input': 'Input',
+  'bet': 'Brain Extraction',
+  'n4': 'Bias Correction',
+  'nlm': 'Denoising',
   'segmentation': 'Segmentation'
 };
 

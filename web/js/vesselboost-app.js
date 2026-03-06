@@ -33,7 +33,6 @@ class VesselBoostApp {
     this.inputFile = null;
     this.currentResultTab = 'input';
     this._overlaySliderValue = 0.5;
-    this._inputVisible = true;
     this._segmentationVisible = true;
     this._lastLocationData = null;
 
@@ -589,71 +588,144 @@ class VesselBoostApp {
 
   // ==================== Results ====================
 
-  handleStageData(data) {
-    if (data.stage !== 'segmentation') return;
-
+  async handleStageData(data) {
     const resultsSection = document.getElementById('resultsSection');
     if (resultsSection) {
       resultsSection.classList.remove('hidden');
       resultsSection.classList.remove('collapsed');
     }
 
-    this.addVolumeToggles();
+    // For preprocessing stages, load as base volume in viewer
+    if (data.stage !== 'segmentation') {
+      const result = this.inferenceExecutor.getResult(data.stage);
+      if (result?.file) {
+        await this.viewerController.loadBaseVolume(result.file);
+        this.syncWindowControls();
+      }
+    }
 
-    const overlayControl = document.getElementById('overlayControl');
-    if (overlayControl) overlayControl.classList.remove('hidden');
+    // Rebuild the results list with all available stages
+    this.rebuildResultsList();
+
+    // Show overlay controls when segmentation arrives
+    if (data.stage === 'segmentation') {
+      const overlayControl = document.getElementById('overlayControl');
+      if (overlayControl) overlayControl.classList.remove('hidden');
+    }
   }
 
-  addVolumeToggles() {
+  rebuildResultsList() {
     const container = document.getElementById('stageButtons');
     if (!container) return;
     container.innerHTML = '';
 
-    // Input Image toggle
+    const stages = this.inferenceExecutor.getStageOrder();
+    const dlSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+    const viewSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+
+    // Input row (always present)
     const inputRow = document.createElement('div');
     inputRow.className = 'volume-toggle';
-    const inputLabel = document.createElement('label');
-    inputLabel.className = 'viewer-checkbox';
-    const inputCb = document.createElement('input');
-    inputCb.type = 'checkbox';
-    inputCb.id = 'toggleInput';
-    inputCb.checked = true;
-    this._inputVisible = true;
-    inputLabel.appendChild(inputCb);
-    inputLabel.appendChild(document.createTextNode('Input Image'));
+    const inputViewBtn = document.createElement('button');
+    inputViewBtn.className = 'view-btn active';
+    inputViewBtn.title = 'View Input';
+    inputViewBtn.innerHTML = viewSvg;
+    inputViewBtn.dataset.stage = 'input';
+    inputViewBtn.addEventListener('click', () => this.viewStage('input'));
+    inputRow.appendChild(inputViewBtn);
+    const inputLabel = document.createElement('span');
+    inputLabel.className = 'stage-label';
+    inputLabel.textContent = 'Input';
     inputRow.appendChild(inputLabel);
     container.appendChild(inputRow);
 
-    // Segmentation toggle
-    const segRow = document.createElement('div');
-    segRow.className = 'volume-toggle';
-    const segLabel = document.createElement('label');
-    segLabel.className = 'viewer-checkbox';
-    const segCb = document.createElement('input');
-    segCb.type = 'checkbox';
-    segCb.id = 'toggleSegmentation';
-    segCb.checked = true;
-    this._segmentationVisible = true;
-    segLabel.appendChild(segCb);
-    segLabel.appendChild(document.createTextNode('Vessel Segmentation'));
-    segRow.appendChild(segLabel);
+    // Preprocessing stages (bet, n4, nlm)
+    for (const stage of stages) {
+      if (stage === 'segmentation') continue;
 
-    const dlBtn = document.createElement('button');
-    dlBtn.className = 'download-btn';
-    dlBtn.title = 'Download Segmentation';
-    dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-    dlBtn.addEventListener('click', () => this.inferenceExecutor.downloadStage('segmentation'));
-    segRow.appendChild(dlBtn);
-    container.appendChild(segRow);
+      const row = document.createElement('div');
+      row.className = 'volume-toggle';
 
-    // Event listeners
-    inputCb.addEventListener('change', (e) => this.toggleInputVisibility(e.target.checked));
-    segCb.addEventListener('change', (e) => this.toggleOverlayVisibility(e.target.checked));
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'view-btn';
+      viewBtn.title = `View ${Config.STAGE_NAMES[stage] || stage}`;
+      viewBtn.innerHTML = viewSvg;
+      viewBtn.dataset.stage = stage;
+      viewBtn.addEventListener('click', () => this.viewStage(stage));
+      row.appendChild(viewBtn);
+
+      const label = document.createElement('span');
+      label.className = 'stage-label';
+      label.textContent = Config.STAGE_NAMES[stage] || stage;
+      row.appendChild(label);
+
+      const dlBtn = document.createElement('button');
+      dlBtn.className = 'download-btn';
+      dlBtn.title = `Download ${Config.STAGE_NAMES[stage] || stage}`;
+      dlBtn.innerHTML = dlSvg;
+      dlBtn.addEventListener('click', () => this.inferenceExecutor.downloadStage(stage));
+      row.appendChild(dlBtn);
+
+      container.appendChild(row);
+    }
+
+    // Segmentation row (if available)
+    if (stages.includes('segmentation')) {
+      const segRow = document.createElement('div');
+      segRow.className = 'volume-toggle';
+
+      const segLabel = document.createElement('label');
+      segLabel.className = 'viewer-checkbox';
+      const segCb = document.createElement('input');
+      segCb.type = 'checkbox';
+      segCb.id = 'toggleSegmentation';
+      segCb.checked = true;
+      this._segmentationVisible = true;
+      segLabel.appendChild(segCb);
+      segLabel.appendChild(document.createTextNode(' Vessel Segmentation'));
+      segRow.appendChild(segLabel);
+
+      const dlBtn = document.createElement('button');
+      dlBtn.className = 'download-btn';
+      dlBtn.title = 'Download Segmentation';
+      dlBtn.innerHTML = dlSvg;
+      dlBtn.addEventListener('click', () => this.inferenceExecutor.downloadStage('segmentation'));
+      segRow.appendChild(dlBtn);
+
+      container.appendChild(segRow);
+
+      segCb.addEventListener('change', (e) => this.toggleOverlayVisibility(e.target.checked));
+    }
   }
 
-  toggleInputVisibility(visible) {
-    this._inputVisible = visible;
-    this.viewerController.setBaseOpacity(visible ? 1 : 0);
+  async viewStage(stage) {
+    let file;
+    if (stage === 'input') {
+      file = this.inputFile;
+    } else {
+      const result = this.inferenceExecutor.getResult(stage);
+      file = result?.file;
+    }
+    if (!file) return;
+
+    await this.viewerController.loadBaseVolume(file);
+    this.syncWindowControls();
+
+    // Re-add segmentation overlay if it exists and is visible
+    if (this._segmentationVisible) {
+      const segResult = this.inferenceExecutor.getResult('segmentation');
+      if (segResult?.file) {
+        await this.viewerController.loadOverlay(segResult.file, 'red');
+      }
+    }
+
+    // Update active state on view buttons
+    const container = document.getElementById('stageButtons');
+    if (container) {
+      container.querySelectorAll('.view-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.stage === stage);
+      });
+    }
   }
 
   toggleOverlayVisibility(visible) {
@@ -681,11 +753,19 @@ class VesselBoostApp {
     if (cancelBtn) cancelBtn.disabled = true;
     if (statusText) statusText.textContent = 'Ready';
 
+    // Show input as base with segmentation overlay
     const fullResult = this.inferenceExecutor.getResult('segmentation');
     const overlayFile = fullResult?.file;
     if (overlayFile && this.inputFile) {
       this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'red').then(() => {
         this.syncWindowControls();
+        // Mark input as active view
+        const container = document.getElementById('stageButtons');
+        if (container) {
+          container.querySelectorAll('.view-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.stage === 'input');
+          });
+        }
       });
     }
   }
@@ -702,7 +782,6 @@ class VesselBoostApp {
   disableAllResultTabs() {
     const container = document.getElementById('stageButtons');
     if (container) container.innerHTML = '';
-    this._inputVisible = true;
     this._segmentationVisible = true;
     this._overlaySliderValue = 0.5;
   }
