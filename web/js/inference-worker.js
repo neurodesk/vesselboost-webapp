@@ -2,7 +2,8 @@
  * VesselBoost Inference Worker
  *
  * Runs ONNX model inference for 3D patch-based vessel segmentation.
- * Pipeline: NIfTI parse -> orient to RAS -> resample -> N4ITK bias correction (WASM) ->
+ * Pipeline: NIfTI parse -> orient to RAS -> resample to target spacing ->
+ *           BET brain extraction (WASM) -> N4ITK bias correction (WASM) ->
  *           NLM denoising (WASM) -> z-score normalize -> foreground crop ->
  *           3D sliding window inference -> threshold -> remove small components ->
  *           inverse transforms -> output NIfTI
@@ -805,10 +806,24 @@ async function runInference(config) {
 
   const rasDims = [...currentDims];
 
-  // 2b. Brain extraction (BET)
-  let brainMask = null; // stored at RAS resolution for final masking
+  // 3. Resample to target spacing (before preprocessing for speed)
+  postProgress(0.05, 'Resampling...');
+  const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
+
+  if (needsResample) {
+    postLog(`Resampling to ${targetSpacing.map(s => s.toFixed(2)).join('x')}mm...`);
+    const resampled = resampleVolume(currentData, currentDims, currentSpacing, targetSpacing);
+    currentData = resampled.data;
+    currentDims = resampled.dims;
+    currentSpacing = resampled.spacing;
+    postLog(`Resampled: ${currentDims.join('x')}`);
+  }
+  const resampledDims = [...currentDims];
+
+  // 4. Brain extraction (BET)
+  let brainMask = null; // stored at resampled resolution for final masking
   if (self._wasmReady && brainExtraction) {
-    postProgress(0.05, 'Brain extraction (BET)...');
+    postProgress(0.06, 'Brain extraction (BET)...');
     postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
     try {
       // BET expects Float64 input
@@ -818,7 +833,7 @@ async function runInference(config) {
       const progressCb = (current, total) => {
         const pct = Math.round((current / total) * 100);
         if (pct % 10 === 0) {
-          postProgress(0.05 + 0.08 * (current / total), `BET: ${pct}%`);
+          postProgress(0.06 + 0.06 * (current / total), `BET: ${pct}%`);
         }
       };
 
@@ -850,22 +865,7 @@ async function runInference(config) {
     postLog('Preprocessing WASM not available - skipping brain extraction');
   }
 
-  // 3. Resample to target spacing
-  postProgress(0.06, 'Resampling...');
-  const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
-
-  let resampledDims;
-  if (needsResample) {
-    postLog(`Resampling to ${targetSpacing.map(s => s.toFixed(2)).join('x')}mm...`);
-    const resampled = resampleVolume(currentData, currentDims, currentSpacing, targetSpacing);
-    currentData = resampled.data;
-    currentDims = resampled.dims;
-    currentSpacing = resampled.spacing;
-    postLog(`Resampled: ${currentDims.join('x')}`);
-  }
-  resampledDims = [...currentDims];
-
-  // 4. WASM Preprocessing (bias correction + denoising)
+  // 5. WASM Preprocessing (bias correction + denoising)
   if (self._wasmReady && (biasCorrection || denoising)) {
     if (biasCorrection) {
       postProgress(0.08, 'Bias field correction (N4ITK)...');
@@ -909,12 +909,12 @@ async function runInference(config) {
     postLog('Preprocessing WASM not available - skipping bias correction and denoising');
   }
 
-  // 5. Normalize
+  // 6. Normalize
   postProgress(0.15, 'Normalizing...');
   postLog('Z-score normalizing (nonzero voxels)...');
   currentData = zScoreNormalizeNonzero(currentData);
 
-  // 6. Crop foreground
+  // 7. Crop foreground
   postProgress(0.17, 'Cropping foreground...');
   const cropped = cropForeground(currentData, currentDims, CROP_MARGIN);
   if (cropped.dims[0] === 0) {
@@ -925,7 +925,7 @@ async function runInference(config) {
   const cropOrigin = cropped.origin;
   postLog(`Cropped: ${currentDims.join('x')} (origin: ${cropOrigin.join(',')})`);
 
-  // 7. Download and load model
+  // 8. Download and load model
   const modelUrl = `${modelBaseUrl}/${modelName}`;
   const modelData = await fetchModel(modelUrl, modelName, 0.20, 0.15);
 
@@ -939,7 +939,7 @@ async function runInference(config) {
   });
   postLog(`Session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 8. 3D Sliding Window Inference
+  // 9. 3D Sliding Window Inference
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_D, PATCH_H, PATCH_W, 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_D, PATCH_H, PATCH_W], overlap);
   const totalPatches = positions.length;
@@ -995,7 +995,7 @@ async function runInference(config) {
   // Release session
   await session.release();
 
-  // 9. Threshold and binarize
+  // 10. Threshold and binarize
   postProgress(0.84, 'Thresholding...');
   postLog(`Thresholding at p=${probabilityThreshold}...`);
   const binaryMask = new Uint8Array(totalVoxels);
@@ -1008,7 +1008,7 @@ async function runInference(config) {
     }
   }
 
-  // 10. Remove small connected components
+  // 11. Remove small connected components
   postProgress(0.87, 'Removing small components...');
   postLog(`Removing components smaller than ${minComponentSize} voxels...`);
   const cleanedMask = removeSmallComponents(binaryMask, currentDims, minComponentSize);
@@ -1019,17 +1019,12 @@ async function runInference(config) {
   }
   postLog(`Segmented voxels: ${totalSegmented}`);
 
-  // 11. Inverse transform: uncrop
+  // 12. Inverse transform: uncrop
   postProgress(0.92, 'Inverse transform...');
   postLog('Applying inverse transforms...');
   let outputLabels = uncrop(cleanedMask, currentDims, resampledDims, cropOrigin);
 
-  // Inverse resample (nearest neighbor)
-  if (needsResample) {
-    outputLabels = resampleLabelsNearest(outputLabels, resampledDims, rasDims);
-  }
-
-  // Apply brain mask to segmentation (at RAS resolution, before inverse orient)
+  // Apply brain mask to segmentation (at resampled resolution, before inverse resample)
   if (brainMask) {
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
@@ -1043,12 +1038,17 @@ async function runInference(config) {
     }
   }
 
+  // Inverse resample (nearest neighbor)
+  if (needsResample) {
+    outputLabels = resampleLabelsNearest(outputLabels, resampledDims, rasDims);
+  }
+
   // Inverse orient
   if (!isIdentity) {
     outputLabels = inverseOrient(outputLabels, rasDims, perm, flip, origDims);
   }
 
-  // 12. Create output NIfTI
+  // 13. Create output NIfTI
   const outputNifti = createOutputNifti(outputLabels, headerBytes, origDims);
   postStageData('segmentation', outputNifti, 'Vessel segmentation');
 
