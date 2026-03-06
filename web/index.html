@@ -137,6 +137,16 @@
               <span>Denoising (NLM) <span class="info-icon">i<span class="info-tooltip">Non-local means denoising to reduce noise while preserving vessel structures.</span></span></span>
             </label>
           </div>
+          <div class="param-group">
+            <label class="viewer-checkbox">
+              <input type="checkbox" id="betToggle" checked>
+              <span>Brain Extraction (BET) <span class="info-icon">i<span class="info-tooltip">Extracts the brain region before segmentation and masks the output. Helps remove false positive vessels outside the brain.</span></span></span>
+            </label>
+          </div>
+          <div class="param-group" id="betFiGroup">
+            <label class="param-label" for="betFiInput">Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0–1.0). Smaller values give larger brain outlines. Default: 0.5.</span></span></label>
+            <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
+          </div>
         </div>
       </section>
 
@@ -401,6 +411,20 @@
           <strong>dcm2niix</strong>
           <p>Li X, Morgan PS, Ashburner J, Smith J, Rorden C. The first step for neuroimaging data analysis: DICOM to NIfTI conversion. J Neurosci Methods. 2016;264:47-56.</p>
           <a href="https://github.com/rordenlab/dcm2niix" target="_blank" rel="noopener">https://github.com/rordenlab/dcm2niix</a>
+        </div>
+      </div>
+
+      <div class="citation-section">
+        <h4>Brain Extraction</h4>
+        <div class="citation-item">
+          <strong>QSM.rs (BET)</strong>
+          <p>Stewart A. QSM.rs: Quantitative Susceptibility Mapping in Rust. FSL-BET2 brain extraction algorithm.</p>
+          <a href="https://github.com/astewartau/QSM.rs" target="_blank" rel="noopener">https://github.com/astewartau/QSM.rs</a>
+        </div>
+        <div class="citation-item">
+          <strong>FSL BET</strong>
+          <p>Smith SM. Fast robust automated brain extraction. Human Brain Mapping. 2002;17(3):143-155.</p>
+          <a href="https://doi.org/10.1002/hbm.10062" target="_blank" rel="noopener">https://doi.org/10.1002/hbm.10062</a>
         </div>
       </div>
 

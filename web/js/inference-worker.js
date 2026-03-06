@@ -721,6 +721,8 @@ async function runInference(config) {
     targetSpacing = [1.0, 1.0, 1.0],
     biasCorrection = true,
     denoising = true,
+    brainExtraction = true,
+    fractionalIntensity = 0.5,
     modelBaseUrl
   } = settings;
 
@@ -756,6 +758,47 @@ async function runInference(config) {
   postLog(`RAS dims: ${currentDims.join('x')}`);
 
   const rasDims = [...currentDims];
+
+  // 2b. Brain extraction (BET)
+  let brainMask = null; // stored at RAS resolution for final masking
+  if (self._wasmReady && brainExtraction) {
+    postProgress(0.05, 'Brain extraction (BET)...');
+    postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
+    try {
+      // BET expects Float64 input
+      const f64Data = new Float64Array(currentData.length);
+      for (let i = 0; i < currentData.length; i++) f64Data[i] = currentData[i];
+
+      const progressCb = (current, total) => {
+        const pct = Math.round((current / total) * 100);
+        if (pct % 10 === 0) {
+          postProgress(0.05 + 0.08 * (current / total), `BET: ${pct}%`);
+        }
+      };
+
+      brainMask = wasm_bindgen.bet_brain_extract(
+        f64Data,
+        currentDims[0], currentDims[1], currentDims[2],
+        currentSpacing[0], currentSpacing[1], currentSpacing[2],
+        fractionalIntensity,
+        progressCb
+      );
+
+      // Apply brain mask to input data
+      let maskCount = 0;
+      for (let i = 0; i < currentData.length; i++) {
+        if (!brainMask[i]) currentData[i] = 0;
+        else maskCount++;
+      }
+      const coverage = (100 * maskCount / currentData.length).toFixed(1);
+      postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
+    } catch (e) {
+      postLog(`Warning: Brain extraction failed: ${e.message}`);
+      brainMask = null;
+    }
+  } else if (brainExtraction) {
+    postLog('Preprocessing WASM not available - skipping brain extraction');
+  }
 
   // 3. Resample to target spacing
   postProgress(0.06, 'Resampling...');
@@ -926,6 +969,20 @@ async function runInference(config) {
   // Inverse resample (nearest neighbor)
   if (needsResample) {
     outputLabels = resampleLabelsNearest(outputLabels, resampledDims, rasDims);
+  }
+
+  // Apply brain mask to segmentation (at RAS resolution, before inverse orient)
+  if (brainMask) {
+    let maskedOut = 0;
+    for (let i = 0; i < outputLabels.length; i++) {
+      if (outputLabels[i] && !brainMask[i]) {
+        outputLabels[i] = 0;
+        maskedOut++;
+      }
+    }
+    if (maskedOut > 0) {
+      postLog(`Brain mask removed ${maskedOut} vessel voxels outside brain`);
+    }
   }
 
   // Inverse orient

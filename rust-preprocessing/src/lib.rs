@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+use js_sys;
 
 mod n4itk;
 mod nlm;
@@ -61,4 +62,49 @@ pub fn nlm_denoise(
         patch_radius as usize,
         h,
     )
+}
+
+/// BET brain extraction (FSL-BET2 algorithm via qsm-core).
+///
+/// # Arguments
+/// * `data` - Flattened Float64 magnitude volume data
+/// * `nx`, `ny`, `nz` - Volume dimensions
+/// * `vsx`, `vsy`, `vsz` - Voxel sizes in mm
+/// * `fractional_intensity` - Intensity threshold (0.0-1.0, smaller = larger brain, default: 0.5)
+/// * `progress_callback` - JS function(current, total) for progress updates
+///
+/// # Returns
+/// Binary mask as Uint8Array (1 = brain, 0 = background)
+#[wasm_bindgen]
+pub fn bet_brain_extract(
+    data: &[f64],
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    vsx: f64,
+    vsy: f64,
+    vsz: f64,
+    fractional_intensity: f64,
+    progress_callback: &js_sys::Function,
+) -> Vec<u8> {
+    let callback = progress_callback.clone();
+    let mask = qsm_core::bet::run_bet_with_progress(
+        data,
+        nx as usize, ny as usize, nz as usize,
+        vsx, vsy, vsz,
+        fractional_intensity,
+        1.0,  // smoothness_factor (FSL default)
+        0.0,  // gradient_threshold (FSL default)
+        1000, // iterations
+        4,    // subdivisions (2562 vertices)
+        |current, total| {
+            let this = JsValue::null();
+            let _ = callback.call2(
+                &this,
+                &JsValue::from(current as u32),
+                &JsValue::from(total as u32),
+            );
+        },
+    );
+    mask
 }

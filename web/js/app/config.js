@@ -17,7 +17,9 @@ export const INFERENCE_DEFAULTS = {
   probabilityThreshold: 0.1,
   minComponentSize: 10,
   biasCorrection: true,
-  denoising: true
+  denoising: true,
+  brainExtraction: true,
+  fractionalIntensity: 0.5
 };
 
 export const VIEWER_CONFIG = {

@@ -543,6 +543,12 @@ class VesselBoostApp {
     const denoiseToggle = document.getElementById('denoiseToggle');
     const denoising = denoiseToggle ? denoiseToggle.checked : Config.INFERENCE_DEFAULTS.denoising;
 
+    const betToggle = document.getElementById('betToggle');
+    const brainExtraction = betToggle ? betToggle.checked : Config.INFERENCE_DEFAULTS.brainExtraction;
+
+    const betFiInput = document.getElementById('betFiInput');
+    const fractionalIntensity = betFiInput ? parseFloat(betFiInput.value) : Config.INFERENCE_DEFAULTS.fractionalIntensity;
+
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
     const inputData = await file.arrayBuffer();
 
@@ -566,6 +572,8 @@ class VesselBoostApp {
         targetSpacing,
         biasCorrection,
         denoising,
+        brainExtraction,
+        fractionalIntensity,
         modelBaseUrl
       }
     });
