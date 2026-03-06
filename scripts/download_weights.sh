@@ -10,8 +10,9 @@ mkdir -p "$WEIGHTS_DIR"
 echo "Downloading VesselBoost pre-trained weights from OSF..."
 echo "Target: $WEIGHTS_DIR/"
 
-# Download from OSF
-OSF_URL="https://osf.io/abk4p/download"
+# BM_VB2_aug_all_ep2k_bat_10_0903 - recommended default model
+# OSF project: https://osf.io/abk4p/ (pretrained_models folder)
+OSF_URL="https://osf.io/download/q9xzm/"
 curl -L -o "$WEIGHTS_DIR/vesselboost_weights.pth" "$OSF_URL"
 
 echo ""

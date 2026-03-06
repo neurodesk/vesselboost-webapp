@@ -10,6 +10,7 @@ Usage (from project root):
 Requires:
     pip install torch onnx onnxruntime
 
+
 Input:  PyTorch .pth checkpoint (VesselBoost 3D UNet)
 Output: ONNX model in web/models/
 """
@@ -22,79 +23,86 @@ import torch
 import torch.nn as nn
 
 
-# ==================== 3D UNet Architecture ====================
+# ==================== VesselBoost 3D UNet Architecture ====================
+# Exact copy from https://github.com/KMarshallX/VesselBoost/blob/master/models/unet_3d.py
+# State dict keys must match: EncB1.convb.convb.0.weight, DecB1.upsample.weight, etc.
 
-class DoubleConv3D(nn.Module):
+class ConvBlock(nn.Module):
     """Two consecutive 3D conv-batchnorm-relu blocks."""
-    def __init__(self, in_ch, out_ch):
+    def __init__(self, in_chan, out_chan):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv3d(in_ch, out_ch, 3, padding=1, bias=False),
-            nn.BatchNorm3d(out_ch),
+        self.convb = nn.Sequential(
+            nn.Conv3d(in_chan, out_chan, kernel_size=3, padding=1),
+            nn.BatchNorm3d(out_chan),
             nn.ReLU(inplace=True),
-            nn.Conv3d(out_ch, out_ch, 3, padding=1, bias=False),
-            nn.BatchNorm3d(out_ch),
+            nn.Conv3d(out_chan, out_chan, kernel_size=3, padding=1),
+            nn.BatchNorm3d(out_chan),
             nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
-        return self.conv(x)
+        return self.convb(x)
 
 
-class UNet3D(nn.Module):
-    """3D UNet for binary vessel segmentation.
-
-    Architecture: 4 encoder/decoder levels with base 16 filters.
-    Encoder: 16 -> 32 -> 64 -> 128
-    Bottleneck: 256
-    Decoder: 128 -> 64 -> 32 -> 16
-    Output: 1 channel (sigmoid for binary segmentation)
-    """
-    def __init__(self, in_channels=1, out_channels=1, base_filters=16):
+class EncBlock(nn.Module):
+    """Encoder block: ConvBlock + MaxPool."""
+    def __init__(self, in_chan, num_filter):
         super().__init__()
-        f = base_filters
-
-        # Encoder
-        self.enc1 = DoubleConv3D(in_channels, f)
-        self.enc2 = DoubleConv3D(f, f * 2)
-        self.enc3 = DoubleConv3D(f * 2, f * 4)
-        self.enc4 = DoubleConv3D(f * 4, f * 8)
-
-        # Bottleneck
-        self.bottleneck = DoubleConv3D(f * 8, f * 16)
-
-        # Decoder
-        self.up4 = nn.ConvTranspose3d(f * 16, f * 8, 2, stride=2)
-        self.dec4 = DoubleConv3D(f * 16, f * 8)
-        self.up3 = nn.ConvTranspose3d(f * 8, f * 4, 2, stride=2)
-        self.dec3 = DoubleConv3D(f * 8, f * 4)
-        self.up2 = nn.ConvTranspose3d(f * 4, f * 2, 2, stride=2)
-        self.dec2 = DoubleConv3D(f * 4, f * 2)
-        self.up1 = nn.ConvTranspose3d(f * 2, f, 2, stride=2)
-        self.dec1 = DoubleConv3D(f * 2, f)
-
-        # Output
-        self.out_conv = nn.Conv3d(f, out_channels, 1)
-
-        self.pool = nn.MaxPool3d(2)
+        self.convb = ConvBlock(in_chan, num_filter)
+        self.maxp = nn.MaxPool3d(2)
 
     def forward(self, x):
-        # Encoder
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
+        xx = self.convb(x)
+        p = self.maxp(xx)
+        return xx, p
 
-        # Bottleneck
-        b = self.bottleneck(self.pool(e4))
 
-        # Decoder
-        d4 = self.dec4(torch.cat([self.up4(b), e4], dim=1))
-        d3 = self.dec3(torch.cat([self.up3(d4), e3], dim=1))
-        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
-        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+class DecBlock(nn.Module):
+    """Decoder block: ConvTranspose (same channels) + cat + ConvBlock."""
+    def __init__(self, in_chan, feat_chan, num_filter):
+        super().__init__()
+        self.upsample = nn.ConvTranspose3d(in_chan, in_chan, kernel_size=(2, 2, 2), stride=2)
+        self.convb = ConvBlock(feat_chan, num_filter)
 
-        return self.out_conv(d1)
+    def forward(self, x, cat_block):
+        xx = self.upsample(x)
+        cated_block = torch.cat([cat_block, xx], dim=1)
+        out = self.convb(cated_block)
+        return out
+
+
+class Unet(nn.Module):
+    """VesselBoost 3D UNet."""
+    def __init__(self, in_chan, out_chan, filter_num):
+        super().__init__()
+        self.EncB1 = EncBlock(in_chan, filter_num)
+        self.EncB2 = EncBlock(filter_num, filter_num * 2)
+        self.EncB3 = EncBlock(filter_num * 2, filter_num * 4)
+        self.EncB4 = EncBlock(filter_num * 4, filter_num * 8)
+
+        self.bridge = ConvBlock(filter_num * 8, filter_num * 16)
+
+        self.DecB1 = DecBlock(filter_num * 16, filter_num * 24, filter_num * 8)
+        self.DecB2 = DecBlock(filter_num * 8, filter_num * 12, filter_num * 4)
+        self.DecB3 = DecBlock(filter_num * 4, filter_num * 6, filter_num * 2)
+        self.DecB4 = DecBlock(filter_num * 2, filter_num * 3, filter_num)
+
+        self.out = nn.Conv3d(filter_num, out_chan, kernel_size=1)
+
+    def forward(self, x):
+        xx1, p1 = self.EncB1(x)
+        xx2, p2 = self.EncB2(p1)
+        xx3, p3 = self.EncB3(p2)
+        xx4, p4 = self.EncB4(p3)
+
+        p5 = self.bridge(p4)
+
+        p6 = self.DecB1(p5, xx4)
+        p7 = self.DecB2(p6, xx3)
+        p8 = self.DecB3(p7, xx2)
+        p9 = self.DecB4(p8, xx1)
+
+        return self.out(p9)
 
 
 # ==================== Configuration ====================
@@ -105,17 +113,15 @@ DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "web", "models")
 
 # ==================== Conversion ====================
 
-def load_model(checkpoint_path, in_channels=1, out_channels=1, base_filters=16):
+def load_model(checkpoint_path, in_chan=1, out_chan=1, filter_num=16):
     """Load a VesselBoost 3D UNet model from a PyTorch checkpoint."""
-    model = UNet3D(in_channels=in_channels, out_channels=out_channels, base_filters=base_filters)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    model = Unet(in_chan=in_chan, out_chan=out_chan, filter_num=filter_num)
+    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
 
-    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        state_dict = checkpoint["model_state_dict"]
-    elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    else:
-        state_dict = checkpoint
+    if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+        state_dict = state_dict["model_state_dict"]
+    elif isinstance(state_dict, dict) and "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]
 
     model.load_state_dict(state_dict)
     model.eval()
@@ -187,7 +193,7 @@ def main():
     parser.add_argument("--output", default=None, help="Output ONNX path (default: web/models/vesselboost.onnx)")
     parser.add_argument("--quantize", action="store_true", help="Apply UINT8 dynamic quantization")
     parser.add_argument("--patch-size", type=int, default=64, help="Patch size (default: 64)")
-    parser.add_argument("--base-filters", type=int, default=16, help="Base filter count (default: 16)")
+    parser.add_argument("--filters", type=int, default=16, help="Base filter count (default: 16)")
     args = parser.parse_args()
 
     if not os.path.exists(args.checkpoint):
@@ -200,10 +206,10 @@ def main():
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Output: {output_path}")
     print(f"Quantize: {args.quantize}")
-    print(f"Architecture: 3D UNet, base_filters={args.base_filters}, patch_size={args.patch_size}")
+    print(f"Architecture: VesselBoost 3D UNet, filters={args.filters}, patch_size={args.patch_size}")
 
     print("\nLoading PyTorch model...")
-    model = load_model(args.checkpoint, base_filters=args.base_filters)
+    model = load_model(args.checkpoint, filter_num=args.filters)
 
     if args.quantize:
         fp32_path = output_path.replace(".onnx", "-fp32.onnx")
