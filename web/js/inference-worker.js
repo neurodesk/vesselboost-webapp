@@ -705,8 +705,7 @@ async function initWasmPreprocessing() {
 // ==================== Utility ====================
 
 function getOptimalWasmThreads() {
-  const hardwareThreads = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-  return Math.max(1, Math.min(8, hardwareThreads));
+  return (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
 }
 
 // ==================== Main Inference Pipeline ====================
@@ -722,20 +721,11 @@ async function runInference(config) {
     targetSpacing = [1.0, 1.0, 1.0],
     biasCorrection = true,
     denoising = true,
-    modelBaseUrl,
-    useWebGPU: useWebGPUSetting
+    modelBaseUrl
   } = settings;
 
   const [PATCH_D, PATCH_H, PATCH_W] = patchSize;
   const CROP_MARGIN = 20;
-
-  // Override WebGPU setting per-run
-  const useWebGPU = self._useWebGPU && (useWebGPUSetting !== false);
-  if (!useWebGPU && self._useWebGPU) {
-    const maxThreads = getOptimalWasmThreads();
-    ort.env.wasm.numThreads = maxThreads;
-    postLog(`Forcing WASM backend with ${maxThreads} threads`);
-  }
 
   // 1. Parse NIfTI
   postLog('Parsing input volume...');
@@ -766,7 +756,6 @@ async function runInference(config) {
   postLog(`RAS dims: ${currentDims.join('x')}`);
 
   const rasDims = [...currentDims];
-  const rasSpacing = [...currentSpacing];
 
   // 3. Resample to target spacing
   postProgress(0.06, 'Resampling...');
@@ -840,8 +829,9 @@ async function runInference(config) {
   const modelData = await fetchModel(modelUrl, modelName, 0.20, 0.15);
 
   postProgress(0.35, 'Loading ONNX model...');
-  const executionProviders = useWebGPU ? ['webgpu', 'wasm'] : ['wasm'];
-  postLog(`Creating ONNX InferenceSession (${executionProviders.join(', ')})...`);
+  // WebGPU does not support 3D pooling/conv kernels - force WASM backend
+  const executionProviders = ['wasm'];
+  postLog(`Creating ONNX InferenceSession (wasm - 3D ops require WASM backend)...`);
   const session = await ort.InferenceSession.create(modelData, {
     executionProviders,
     graphOptimizationLevel: 'all'
@@ -852,7 +842,7 @@ async function runInference(config) {
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_D, PATCH_H, PATCH_W, 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_D, PATCH_H, PATCH_W], overlap);
   const totalPatches = positions.length;
-  postLog(`Starting 3D inference: ${totalPatches} patches (${PATCH_D}x${PATCH_H}x${PATCH_W}), overlap=${overlap}, backend=${useWebGPU ? 'webgpu' : 'wasm'}`);
+  postLog(`Starting 3D inference: ${totalPatches} patches (${PATCH_D}x${PATCH_H}x${PATCH_W}), overlap=${overlap}, backend=wasm`);
 
   const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
   const probAccum = new Float32Array(totalVoxels);
@@ -969,22 +959,8 @@ self.onmessage = async (e) => {
         ort.env.wasm.numThreads = getOptimalWasmThreads();
         ort.env.wasm.wasmPaths = '../wasm/';
 
-        // Detect WebGPU support
-        self._useWebGPU = false;
-        if (typeof navigator !== 'undefined' && navigator.gpu) {
-          try {
-            const adapter = await navigator.gpu.requestAdapter();
-            if (adapter) {
-              self._useWebGPU = true;
-              postLog('WebGPU available - will use GPU acceleration');
-            }
-          } catch (e) {
-            postLog('WebGPU detection failed, using WASM backend');
-          }
-        }
-        if (!self._useWebGPU) {
-          postLog(`Using WASM backend (WebGPU not available, ${ort.env.wasm.numThreads} threads)`);
-        }
+        // WebGPU not supported for 3D ops - always use WASM
+        postLog(`Using WASM backend (${ort.env.wasm.numThreads} threads)`);
 
         // Initialize preprocessing WASM
         self._wasmReady = await initWasmPreprocessing();
@@ -997,7 +973,7 @@ self.onmessage = async (e) => {
           storeName: 'models'
         });
 
-        self.postMessage({ type: 'initialized', webgpuAvailable: self._useWebGPU });
+        self.postMessage({ type: 'initialized' });
       } catch (error) {
         postError(`Initialization failed: ${error.message}`);
       }

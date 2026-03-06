@@ -100,7 +100,3 @@ jobs:
             gh release create "$TAG" --generate-notes --title "$TAG" --latest
           fi
 
-      - name: Trigger deploy
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run deploy-pages.yml --ref main

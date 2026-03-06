@@ -543,10 +543,6 @@ class VesselBoostApp {
     const denoiseToggle = document.getElementById('denoiseToggle');
     const denoising = denoiseToggle ? denoiseToggle.checked : Config.INFERENCE_DEFAULTS.denoising;
 
-    // Get WebGPU toggle state
-    const webgpuToggle = document.getElementById('webgpuToggle');
-    const useWebGPU = webgpuToggle ? webgpuToggle.checked : true;
-
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
     const inputData = await file.arrayBuffer();
 
@@ -570,8 +566,7 @@ class VesselBoostApp {
         targetSpacing,
         biasCorrection,
         denoising,
-        modelBaseUrl,
-        useWebGPU
+        modelBaseUrl
       }
     });
   }
@@ -667,10 +662,7 @@ class VesselBoostApp {
   }
 
   onWorkerInitialized() {
-    if (this.inferenceExecutor.webgpuAvailable) {
-      const group = document.getElementById('webgpuGroup');
-      if (group) group.classList.remove('hidden');
-    }
+    // WebGPU not used (3D ops unsupported), nothing to toggle
   }
 
   onInferenceComplete() {
