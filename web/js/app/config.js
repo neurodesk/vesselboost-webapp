@@ -18,7 +18,6 @@ export const INFERENCE_DEFAULTS = {
   minComponentSize: 10,
   biasCorrection: true,
   denoising: true,
-  brainExtraction: true,
   fractionalIntensity: 0.5
 };
 

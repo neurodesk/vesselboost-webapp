@@ -768,7 +768,6 @@ async function runInference(config) {
     targetSpacing = [1.0, 1.0, 1.0],
     biasCorrection = true,
     denoising = true,
-    brainExtraction = true,
     fractionalIntensity = 0.5,
     modelBaseUrl
   } = settings;
@@ -828,8 +827,9 @@ async function runInference(config) {
     postLog(`Warning: Resampled volume is very large (${(totalVoxelsPreproc / 1e6).toFixed(0)}M voxels, ~${volumeSizeMB}MB). Preprocessing may fail or run slowly. Consider increasing target spacing.`);
   }
 
-  let brainMask = null; // stored at resampled resolution for final masking
-  if (self._wasmReady && brainExtraction) {
+  // BET: compute brain mask for final output masking (does NOT modify input data)
+  let brainMask = null;
+  if (self._wasmReady) {
     postProgress(0.06, 'Brain extraction (BET)...');
     postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
     try {
@@ -849,23 +849,25 @@ async function runInference(config) {
         progressCb
       );
 
-      // Apply brain mask to input data
       let maskCount = 0;
-      for (let i = 0; i < currentData.length; i++) {
-        if (!brainMask[i]) currentData[i] = 0;
-        else maskCount++;
+      for (let i = 0; i < brainMask.length; i++) {
+        if (brainMask[i]) maskCount++;
       }
       const coverage = (100 * maskCount / currentData.length).toFixed(1);
       postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
 
-      // Emit brain-extracted volume as stage
-      const betNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+      // Emit brain mask as stage (show masked volume for visualization)
+      const maskedPreview = new Float32Array(currentData.length);
+      for (let i = 0; i < currentData.length; i++) {
+        maskedPreview[i] = brainMask[i] ? currentData[i] : 0;
+      }
+      const betNifti = createFloat32Nifti(maskedPreview, headerBytes, currentDims, currentSpacing);
       postStageData('bet', betNifti, 'Brain extraction (BET)');
     } catch (e) {
       postLog(`Warning: Brain extraction failed: ${e.message}`);
       brainMask = null;
     }
-  } else if (brainExtraction) {
+  } else {
     postLog('Preprocessing WASM not available - skipping brain extraction');
   }
 
