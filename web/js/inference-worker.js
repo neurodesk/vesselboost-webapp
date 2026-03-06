@@ -821,6 +821,13 @@ async function runInference(config) {
   const resampledDims = [...currentDims];
 
   // 4. Brain extraction (BET)
+  const totalVoxelsPreproc = currentDims[0] * currentDims[1] * currentDims[2];
+  const volumeSizeMB = Math.round(totalVoxelsPreproc * 4 / (1024 * 1024));
+  const maxWasmVoxels = 100 * 1024 * 1024; // ~100M voxels (~400MB Float32, ~800MB Float64)
+  if (totalVoxelsPreproc > maxWasmVoxels) {
+    postLog(`Warning: Resampled volume is very large (${(totalVoxelsPreproc / 1e6).toFixed(0)}M voxels, ~${volumeSizeMB}MB). Preprocessing may fail or run slowly. Consider increasing target spacing.`);
+  }
+
   let brainMask = null; // stored at resampled resolution for final masking
   if (self._wasmReady && brainExtraction) {
     postProgress(0.06, 'Brain extraction (BET)...');

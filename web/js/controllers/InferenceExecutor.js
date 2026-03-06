@@ -100,7 +100,10 @@ export class InferenceExecutor {
       description: data.description
     };
 
-    this.onStageData(data);
+    Promise.resolve(this.onStageData(data)).catch(err => {
+      console.error('Error handling stage data:', err);
+      this.updateOutput(`Error displaying ${data.stage}: ${err.message}`);
+    });
   }
 
   async initialize() {
