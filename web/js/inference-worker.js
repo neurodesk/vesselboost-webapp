@@ -719,7 +719,7 @@ async function runInference(config) {
     overlap = 0.5,
     probabilityThreshold = 0.1,
     minComponentSize = 10,
-    targetSpacing = [0.3, 0.3, 0.3],
+    targetSpacing = [1.0, 1.0, 1.0],
     biasCorrection = true,
     denoising = true,
     modelBaseUrl,
