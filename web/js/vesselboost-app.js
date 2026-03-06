@@ -5,7 +5,6 @@
  */
 
 import { FileIOController } from './controllers/FileIOController.js';
-import { DicomController } from './controllers/DicomController.js';
 import { ViewerController } from './controllers/ViewerController.js';
 import { InferenceExecutor } from './controllers/InferenceExecutor.js';
 import { ConsoleOutput } from './modules/ui/ConsoleOutput.js';
@@ -54,13 +53,6 @@ class VesselBoostApp {
       onFileLoaded: (file) => this.onFileLoaded(file)
     });
 
-    this.dicomController = new DicomController({
-      updateOutput: (msg) => this.updateOutput(msg),
-      onConversionComplete: (file) => {
-        this.fileIOController.setFileFromDicom(file);
-      }
-    });
-
     this.viewerController = new ViewerController({
       nv: this.nv,
       updateOutput: (msg) => this.updateOutput(msg)
@@ -90,7 +82,6 @@ class VesselBoostApp {
     this.viewerController.registerVesselColormap(colormapData);
 
     this.setupEventListeners();
-    this.setupInputModeTabs();
     this.setupInfoTooltips();
 
     // Start ONNX initialization in background
@@ -135,20 +126,14 @@ class VesselBoostApp {
   // ==================== Event Listeners ====================
 
   setupEventListeners() {
-    const niftiInput = document.getElementById('niftiInput');
-    if (niftiInput) {
-      niftiInput.addEventListener('change', (e) => this.fileIOController.handleFileInput(e));
-    }
-
-    const dicomInput = document.getElementById('dicomInput');
-    if (dicomInput) {
-      dicomInput.addEventListener('change', (e) => {
-        this.dicomController.convertFiles(Array.from(e.target.files));
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput) {
+      fileInput.addEventListener('change', (e) => {
+        this.fileIOController.handleFiles(e.target.files);
       });
     }
 
-    this.setupDropZone('niftiDropZone', 'nifti');
-    this.setupDropZone('dicomDropZone', 'dicom');
+    this.setupDropZone();
 
     const runBtn = document.getElementById('runSegmentation');
     if (runBtn) runBtn.addEventListener('click', () => this.runSegmentation());
@@ -248,8 +233,8 @@ class VesselBoostApp {
     if (closePrivacy) closePrivacy.addEventListener('click', () => this.privacyModal.close());
   }
 
-  setupDropZone(zoneId, mode) {
-    const zone = document.getElementById(zoneId);
+  setupDropZone() {
+    const zone = document.getElementById('inputDropZone');
     if (!zone) return;
 
     zone.addEventListener('dragover', (e) => {
@@ -264,34 +249,7 @@ class VesselBoostApp {
     zone.addEventListener('drop', (e) => {
       e.preventDefault();
       zone.classList.remove('dragover');
-
-      if (mode === 'dicom') {
-        this.dicomController.convertDropItems(e.dataTransfer.items);
-      } else {
-        const files = Array.from(e.dataTransfer.files);
-        if (files.length > 0) {
-          this.fileIOController.niftiFile = files[0];
-          this.fileIOController.updateFileListUI('nifti', [files[0]]);
-          this.fileIOController.updateOutput(`Loaded: ${files[0].name}`);
-          this.fileIOController.onFileLoaded(files[0]);
-        }
-      }
-    });
-  }
-
-  setupInputModeTabs() {
-    document.querySelectorAll('.input-mode-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        const mode = tab.dataset.mode;
-        this.fileIOController.setInputMode(mode);
-
-        document.querySelectorAll('.input-mode-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-
-        document.querySelectorAll('.input-mode-content').forEach(c => c.classList.remove('active'));
-        const content = document.getElementById(`${mode}Mode`);
-        if (content) content.classList.add('active');
-      });
+      this.fileIOController.handleDropItems(e.dataTransfer.items);
     });
   }
 
@@ -830,12 +788,8 @@ class VesselBoostApp {
     }
   }
 
-  removeFile(type, index) {
-    this.fileIOController.removeFile(type, index);
-  }
-
-  clearFiles(type) {
-    this.fileIOController.clearFiles(type);
+  clearFiles() {
+    this.fileIOController.clearFiles();
   }
 }
 

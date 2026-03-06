@@ -1,89 +1,117 @@
 /**
  * FileIOController
  *
- * Handles single MRI file input for vessel segmentation.
- * Supports both NIfTI and DICOM input modes.
+ * Handles unified file input for vessel segmentation.
+ * Auto-detects NIfTI vs DICOM and converts as needed.
  */
+
+import { DicomController } from './DicomController.js';
 
 export class FileIOController {
   constructor(options) {
     this.updateOutput = options.updateOutput || (() => {});
     this.onFileLoaded = options.onFileLoaded || (() => {});
 
-    this.inputMode = 'dicom';
-    this.niftiFile = null;
-    this.dicomFile = null;
+    this.file = null;
+
+    this.dicomController = new DicomController({
+      updateOutput: (msg) => this.updateOutput(msg),
+      onConversionComplete: (niftiFile) => {
+        this.file = niftiFile;
+        this._updateUI(niftiFile.name);
+        this.onFileLoaded(niftiFile);
+      }
+    });
   }
 
-  getInputMode() { return this.inputMode; }
-  setInputMode(mode) { this.inputMode = mode; }
-
   getActiveFile() {
-    return this.inputMode === 'dicom' ? this.dicomFile : this.niftiFile;
+    return this.file;
   }
 
   hasValidData() {
-    return this.getActiveFile() !== null;
+    return this.file !== null;
   }
 
-  handleFileInput(event) {
-    const files = Array.from(event.target.files);
-    if (files.length === 0) return;
+  handleFiles(files) {
+    if (!files || files.length === 0) return;
 
-    this.niftiFile = files[0];
-    this.updateFileListUI('nifti', [this.niftiFile]);
-    this.updateOutput(`Loaded: ${this.niftiFile.name}`);
-    this.onFileLoaded(this.niftiFile);
-  }
-
-  setFileFromDicom(file) {
-    this.dicomFile = file;
-    this.updateFileListUI('dicom', [file]);
-    this.onFileLoaded(file);
-  }
-
-  updateFileListUI(type, files) {
-    const listElement = document.getElementById(`${type}List`);
-    const fileDrop = listElement?.closest('.upload-group')?.querySelector('.file-drop');
-
-    if (!listElement) return;
-
-    listElement.innerHTML = '';
-
-    if (files && files.length > 0) {
-      fileDrop?.classList.add('has-files');
-      files.forEach((file) => {
-        const fileItem = document.createElement('div');
-        fileItem.className = 'file-item';
-        fileItem.innerHTML = `
-          <span>${file.name}</span>
-          <button class="file-remove" onclick="app.clearFiles('${type}')">&times;</button>
-        `;
-        listElement.appendChild(fileItem);
-      });
-
-      const label = fileDrop?.querySelector('.file-drop-label span');
-      if (label) label.textContent = files[0].name || '1 file selected';
+    if (this._isNifti(files)) {
+      const niftiFile = this._findNiftiFile(files);
+      this.file = niftiFile;
+      this._updateUI(niftiFile.name);
+      this.updateOutput(`Loaded: ${niftiFile.name}`);
+      this.onFileLoaded(niftiFile);
     } else {
-      fileDrop?.classList.remove('has-files');
-      const label = fileDrop?.querySelector('.file-drop-label span');
-      if (label) label.textContent = 'Drop or click';
+      this.updateOutput(`Detected DICOM input (${files.length} files)`);
+      this.dicomController.convertFiles(Array.from(files));
     }
   }
 
-  clearFiles(type) {
-    if (type === 'nifti') {
-      this.niftiFile = null;
-    } else if (type === 'dicom') {
-      this.dicomFile = null;
+  handleDropItems(dataTransferItems) {
+    if (!dataTransferItems || dataTransferItems.length === 0) return;
+
+    // Check if any dropped item is a NIfTI file
+    const files = [];
+    for (let i = 0; i < dataTransferItems.length; i++) {
+      const file = dataTransferItems[i].getAsFile?.();
+      if (file) files.push(file);
     }
-    this.updateFileListUI(type, []);
+
+    if (files.length > 0 && this._isNifti(files)) {
+      this.handleFiles(files);
+      return;
+    }
+
+    // Otherwise treat as DICOM (may be folder drop)
+    this.dicomController.convertDropItems(dataTransferItems);
   }
 
-  clearAllFiles() {
-    this.niftiFile = null;
-    this.dicomFile = null;
-    this.updateFileListUI('nifti', []);
-    this.updateFileListUI('dicom', []);
+  _isNifti(files) {
+    return Array.from(files).some(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.nii') || name.endsWith('.nii.gz');
+    });
+  }
+
+  _findNiftiFile(files) {
+    return Array.from(files).find(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.nii') || name.endsWith('.nii.gz');
+    });
+  }
+
+  _updateUI(filename) {
+    const dropZone = document.getElementById('inputDropZone');
+    const fileList = document.getElementById('fileList');
+
+    if (dropZone) {
+      dropZone.classList.add('has-files');
+      const label = dropZone.querySelector('.file-drop-label span');
+      if (label) label.textContent = filename;
+    }
+
+    if (fileList) {
+      fileList.innerHTML = '';
+      const fileItem = document.createElement('div');
+      fileItem.className = 'file-item';
+      fileItem.innerHTML = `
+        <span>${filename}</span>
+        <button class="file-remove" onclick="app.clearFiles()">&times;</button>
+      `;
+      fileList.appendChild(fileItem);
+    }
+  }
+
+  clearFiles() {
+    this.file = null;
+    const dropZone = document.getElementById('inputDropZone');
+    const fileList = document.getElementById('fileList');
+
+    if (dropZone) {
+      dropZone.classList.remove('has-files');
+      const label = dropZone.querySelector('.file-drop-label span');
+      if (label) label.textContent = 'Drop NIfTI or DICOM files';
+    }
+    if (fileList) fileList.innerHTML = '';
   }
 }

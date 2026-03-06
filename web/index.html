@@ -48,37 +48,14 @@
           Input
         </h2>
         <div class="section-content">
-          <!-- Input mode tabs -->
-          <div class="input-mode-tabs">
-            <button class="input-mode-tab active" data-mode="dicom">DICOM</button>
-            <button class="input-mode-tab" data-mode="nifti">NIfTI</button>
-          </div>
-
-          <!-- DICOM mode -->
-          <div class="input-mode-content active" id="dicomMode">
-            <div class="file-upload-group">
-              <div class="upload-group">
-                <div class="file-upload-zone file-drop" id="dicomDropZone">
-                  <input type="file" id="dicomInput" webkitdirectory multiple>
-                  <svg class="upload-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  <p class="upload-text file-drop-label"><span>Drop DICOM folder or click</span></p>
-                </div>
-                <div class="file-list" id="dicomList"></div>
+          <div class="file-upload-group">
+            <div class="upload-group">
+              <div class="file-upload-zone file-drop" id="inputDropZone">
+                <input type="file" id="fileInput" multiple>
+                <svg class="upload-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <p class="upload-text file-drop-label"><span>Drop NIfTI or DICOM files</span></p>
               </div>
-            </div>
-          </div>
-
-          <!-- NIfTI mode -->
-          <div class="input-mode-content" id="niftiMode">
-            <div class="file-upload-group">
-              <div class="upload-group">
-                <div class="file-upload-zone file-drop" id="niftiDropZone">
-                  <input type="file" id="niftiInput" accept=".nii,.nii.gz">
-                  <svg class="upload-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  <p class="upload-text file-drop-label"><span>Drop NIfTI or click</span></p>
-                </div>
-                <div class="file-list" id="niftiList"></div>
-              </div>
+              <div class="file-list" id="fileList"></div>
             </div>
           </div>
         </div>
