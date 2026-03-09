@@ -485,20 +485,20 @@ function cropForeground(data, dims, margin) {
 
 // ==================== 3D Sliding Window ====================
 
-function computeGaussianWeightMap3D(d, h, w, sigma) {
-  if (!sigma) sigma = Math.min(d, h, w) / 8;
-  const weights = new Float32Array(d * h * w);
-  const cz = (d - 1) / 2;
-  const cy = (h - 1) / 2;
-  const cx = (w - 1) / 2;
+function computeGaussianWeightMap3D(dim0, dim1, dim2, sigma) {
+  if (!sigma) sigma = Math.min(dim0, dim1, dim2) / 8;
+  const weights = new Float32Array(dim0 * dim1 * dim2);
+  const c0 = (dim0 - 1) / 2;
+  const c1 = (dim1 - 1) / 2;
+  const c2 = (dim2 - 1) / 2;
   const s2 = 2 * sigma * sigma;
-  for (let z = 0; z < d; z++) {
-    const dz = z - cz;
-    for (let y = 0; y < h; y++) {
-      const dy = y - cy;
-      for (let x = 0; x < w; x++) {
-        const dx = x - cx;
-        weights[z * h * w + y * w + x] = Math.exp(-(dz*dz + dy*dy + dx*dx) / s2);
+  for (let i0 = 0; i0 < dim0; i0++) {
+    const d0 = i0 - c0;
+    for (let i1 = 0; i1 < dim1; i1++) {
+      const d1 = i1 - c1;
+      for (let i2 = 0; i2 < dim2; i2++) {
+        const d2 = i2 - c2;
+        weights[i0 * dim1 * dim2 + i1 * dim2 + i2] = Math.exp(-(d0*d0 + d1*d1 + d2*d2) / s2);
       }
     }
   }
@@ -547,22 +547,26 @@ function computePatchPositions3D(volumeDims, patchDims, overlap) {
 }
 
 function extractPatch3D(volume, volumeDims, position, patchDims) {
-  const [vx, vy, vz] = volumeDims;
-  const [px, py, pz] = patchDims;
-  const [ox, oy, oz] = position;
-  const patch = new Float32Array(px * py * pz);
+  const [v0, v1, v2] = volumeDims;
+  const [p0, p1, p2] = patchDims;
+  const [o0, o1, o2] = position;
+  const patch = new Float32Array(p0 * p1 * p2);
 
-  for (let z = 0; z < pz; z++) {
-    const sz = oz + z;
-    if (sz < 0 || sz >= vz) continue;
-    for (let y = 0; y < py; y++) {
-      const sy = oy + y;
-      if (sy < 0 || sy >= vy) continue;
-      const srcOff = sz * vx * vy + sy * vx + ox;
-      const dstOff = z * px * py + y * px;
-      const copyLen = Math.min(px, vx - ox);
-      if (copyLen > 0 && ox >= 0) {
-        patch.set(volume.subarray(srcOff, srcOff + copyLen), dstOff);
+  // Match the original VesselBoost NumPy/PyTorch array order:
+  // for a tensor shaped [dim0, dim1, dim2], dim2 is contiguous in memory.
+  for (let i0 = 0; i0 < p0; i0++) {
+    const g0 = o0 + i0;
+    if (g0 < 0 || g0 >= v0) continue;
+    for (let i1 = 0; i1 < p1; i1++) {
+      const g1 = o1 + i1;
+      if (g1 < 0 || g1 >= v1) continue;
+      for (let i2 = 0; i2 < p2; i2++) {
+        const g2 = o2 + i2;
+        if (g2 < 0 || g2 >= v2) continue;
+
+        const srcIdx = g0 + g1 * v0 + g2 * v0 * v1;
+        const dstIdx = i0 * p1 * p2 + i1 * p2 + i2;
+        patch[dstIdx] = volume[srcIdx];
       }
     }
   }
@@ -571,22 +575,22 @@ function extractPatch3D(volume, volumeDims, position, patchDims) {
 }
 
 function accumulatePatch3D(probAccum, weightAccum, volumeDims, position, output, weights, patchDims) {
-  const [vx, vy] = volumeDims;
-  const [px, py, pz] = patchDims;
-  const [ox, oy, oz] = position;
+  const [v0, v1, v2] = volumeDims;
+  const [p0, p1, p2] = patchDims;
+  const [o0, o1, o2] = position;
 
-  for (let z = 0; z < pz; z++) {
-    const gz = oz + z;
-    if (gz < 0 || gz >= volumeDims[2]) continue;
-    for (let y = 0; y < py; y++) {
-      const gy = oy + y;
-      if (gy < 0 || gy >= volumeDims[1]) continue;
-      for (let x = 0; x < px; x++) {
-        const gx = ox + x;
-        if (gx < 0 || gx >= volumeDims[0]) continue;
+  for (let i0 = 0; i0 < p0; i0++) {
+    const g0 = o0 + i0;
+    if (g0 < 0 || g0 >= v0) continue;
+    for (let i1 = 0; i1 < p1; i1++) {
+      const g1 = o1 + i1;
+      if (g1 < 0 || g1 >= v1) continue;
+      for (let i2 = 0; i2 < p2; i2++) {
+        const g2 = o2 + i2;
+        if (g2 < 0 || g2 >= v2) continue;
 
-        const patchIdx = z * px * py + y * px + x;
-        const globalIdx = gz * vx * vy + gy * vx + gx;
+        const patchIdx = i0 * p1 * p2 + i1 * p2 + i2;
+        const globalIdx = g0 + g1 * v0 + g2 * v0 * v1;
         const w = weights[patchIdx];
         probAccum[globalIdx] += output[patchIdx] * w;
         weightAccum[globalIdx] += w;
@@ -833,7 +837,7 @@ async function runInference(config) {
     modelBaseUrl
   } = settings;
 
-  const [PATCH_D, PATCH_H, PATCH_W] = patchSize;
+  const [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2] = patchSize;
   const CROP_MARGIN = 20;
 
   // 1. Parse NIfTI
@@ -894,6 +898,8 @@ async function runInference(config) {
       const coverage = (100 * maskCount / currentData.length).toFixed(1);
       postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
 
+      // Keep the model input untouched; the mask is retained only for filtering
+      // the final segmentation output and for displaying this intermediate preview.
       const maskedPreview = new Float32Array(currentData.length);
       for (let i = 0; i < currentData.length; i++) {
         maskedPreview[i] = brainMask[i] ? currentData[i] : 0;
@@ -1069,10 +1075,10 @@ async function runInference(config) {
   postLog(`Session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
   // 12. 3D Sliding Window Inference
-  const gaussianWeights = computeGaussianWeightMap3D(PATCH_D, PATCH_H, PATCH_W, 8);
-  const positions = computePatchPositions3D(currentDims, [PATCH_D, PATCH_H, PATCH_W], overlap);
+  const gaussianWeights = computeGaussianWeightMap3D(PATCH_DIM0, PATCH_DIM1, PATCH_DIM2, 8);
+  const positions = computePatchPositions3D(currentDims, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2], overlap);
   const totalPatches = positions.length;
-  postLog(`Starting 3D inference: ${totalPatches} patches (${PATCH_D}x${PATCH_H}x${PATCH_W}), overlap=${overlap}, backend=wasm`);
+  postLog(`Starting 3D inference: ${totalPatches} patches (${PATCH_DIM0}x${PATCH_DIM1}x${PATCH_DIM2}), overlap=${overlap}, backend=wasm`);
 
   const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
   const probAccum = new Float32Array(totalVoxels);
@@ -1080,7 +1086,7 @@ async function runInference(config) {
 
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
-  const patchVoxels = PATCH_D * PATCH_H * PATCH_W;
+  const patchVoxels = PATCH_DIM0 * PATCH_DIM1 * PATCH_DIM2;
 
   const inferenceStartTime = performance.now();
 
@@ -1088,27 +1094,35 @@ async function runInference(config) {
     const pos = positions[pi];
 
     // Extract 3D patch
-    const patch = extractPatch3D(currentData, currentDims, pos, [PATCH_D, PATCH_H, PATCH_W]);
+    const patch = extractPatch3D(currentData, currentDims, pos, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
 
-    // Run inference: input [1, 1, D, H, W]
-    const inputTensor = new ort.Tensor('float32', patch, [1, 1, PATCH_D, PATCH_H, PATCH_W]);
+    // Preserve the upstream VesselBoost array order when packing the model tensor.
+    const inputTensor = new ort.Tensor('float32', patch, [1, 1, PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
     const results = await session.run({ [inputName]: inputTensor });
     const output = results[outputName].data; // [1, 1, D, H, W]
     inputTensor.dispose();
 
     // Apply sigmoid if output contains values outside [0, 1] (logits)
+    // Sample multiple evenly-spaced values to reliably detect logits
+    let needsSigmoid = false;
+    const sampleStep = Math.max(1, Math.floor(patchVoxels / 20));
+    for (let si = 0; si < patchVoxels; si += sampleStep) {
+      if (output[si] < 0 || output[si] > 1) { needsSigmoid = true; break; }
+    }
     let probabilities;
-    if (output[0] < 0 || output[0] > 1 || output[patchVoxels - 1] < 0 || output[patchVoxels - 1] > 1) {
+    if (needsSigmoid) {
+      if (pi === 0) postLog(`Applying sigmoid (output range: [${output[0].toFixed(3)}, ${output[patchVoxels-1].toFixed(3)}])`);
       probabilities = new Float32Array(patchVoxels);
       for (let i = 0; i < patchVoxels; i++) {
         probabilities[i] = 1.0 / (1.0 + Math.exp(-output[i]));
       }
     } else {
+      if (pi === 0) postLog(`No sigmoid needed (output already in [0,1])`);
       probabilities = output instanceof Float32Array ? output : new Float32Array(output);
     }
 
     // Accumulate with Gaussian weights
-    accumulatePatch3D(probAccum, weightAccum, currentDims, pos, probabilities, gaussianWeights, [PATCH_D, PATCH_H, PATCH_W]);
+    accumulatePatch3D(probAccum, weightAccum, currentDims, pos, probabilities, gaussianWeights, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
 
     // Progress reporting
     if (pi % 5 === 0 || pi === totalPatches - 1) {
@@ -1158,7 +1172,7 @@ async function runInference(config) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
   }
 
-  // Apply brain mask in native RAS subsection space before reinsertion
+  // Apply the brain mask only to the final segmentation output.
   if (brainMask) {
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
