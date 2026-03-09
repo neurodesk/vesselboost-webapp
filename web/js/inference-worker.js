@@ -2,9 +2,9 @@
  * VesselBoost Inference Worker
  *
  * Runs ONNX model inference for 3D patch-based vessel segmentation.
- * Pipeline: NIfTI parse -> orient to RAS -> centered slice subsection ->
- *           resample subsection to 0.3mm -> BET brain extraction (WASM) ->
- *           N4ITK bias correction (WASM) ->
+ * Pipeline: NIfTI parse -> orient to RAS -> BET brain extraction (WASM) ->
+ *           centered slice subsection (image + mask) ->
+ *           resample subsection to 0.3mm -> N4ITK bias correction (WASM) ->
  *           NLM denoising (WASM) -> z-score normalize -> foreground crop ->
  *           3D sliding window inference -> threshold -> remove small components ->
  *           inverse transforms -> output NIfTI
@@ -373,23 +373,30 @@ function resampleVolume(data, dims, srcSpacing, tgtSpacing) {
   return { data: result, dims: newDims, spacing: tgtSpacing };
 }
 
-function extractSliceSubsection(data, dims, fraction) {
+function extractSliceRange(data, dims, startZ, endZ, outputCtor = Float32Array) {
+  const [nx, ny, nz] = dims;
+  const clampedStart = Math.max(0, Math.min(nz, Math.floor(startZ)));
+  const clampedEnd = Math.max(clampedStart, Math.min(nz, Math.floor(endZ)));
+  const subsetNz = clampedEnd - clampedStart;
+  const sliceSize = nx * ny;
+  const result = new outputCtor(sliceSize * subsetNz);
+  for (let z = 0; z < subsetNz; z++) {
+    const srcOff = (clampedStart + z) * sliceSize;
+    const dstOff = z * sliceSize;
+    result.set(data.subarray(srcOff, srcOff + sliceSize), dstOff);
+  }
+  return { data: result, dims: [nx, ny, subsetNz] };
+}
+
+function extractSliceSubsection(data, dims, fraction, outputCtor = Float32Array) {
   const [nx, ny, nz] = dims;
   const clampedFraction = Math.max(0.01, Math.min(1, Number.isFinite(fraction) ? fraction : 1));
   const subsetNz = Math.max(1, Math.min(nz, Math.round(nz * clampedFraction)));
   const startZ = Math.max(0, Math.floor((nz - subsetNz) / 2));
   const endZ = startZ + subsetNz;
-
-  const sliceSize = nx * ny;
-  const result = new Float32Array(sliceSize * subsetNz);
-  for (let z = 0; z < subsetNz; z++) {
-    const srcOff = (startZ + z) * sliceSize;
-    const dstOff = z * sliceSize;
-    result.set(data.subarray(srcOff, srcOff + sliceSize), dstOff);
-  }
-
+  const extracted = extractSliceRange(data, dims, startZ, endZ, outputCtor);
   return {
-    data: result,
+    data: extracted.data,
     dims: [nx, ny, subsetNz],
     startZ,
     endZ,
@@ -858,7 +865,49 @@ async function runInference(config) {
 
   const rasDims = [...currentDims];
 
-  // 3. Process centered slice subsection (axial Z range) in native RAS space
+  // 3. Brain extraction (BET) on full RAS volume
+  let brainMask = null;
+  if (self._wasmReady) {
+    postProgress(0.05, 'Brain extraction (BET)...');
+    postLog(`Running BET brain extraction on full RAS volume (fi=${fractionalIntensity})...`);
+    try {
+      const progressCb = (current, total) => {
+        const pct = Math.round((current / total) * 100);
+        if (pct % 10 === 0) {
+          postProgress(0.05 + 0.02 * (current / total), `BET: ${pct}%`);
+        }
+      };
+
+      brainMask = wasm_bindgen.bet_brain_extract(
+        currentData,
+        currentDims[0], currentDims[1], currentDims[2],
+        currentSpacing[0], currentSpacing[1], currentSpacing[2],
+        fractionalIntensity,
+        progressCb
+      );
+
+      let maskCount = 0;
+      for (let i = 0; i < brainMask.length; i++) {
+        if (brainMask[i]) maskCount++;
+      }
+      const coverage = (100 * maskCount / currentData.length).toFixed(1);
+      postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
+
+      const maskedPreview = new Float32Array(currentData.length);
+      for (let i = 0; i < currentData.length; i++) {
+        maskedPreview[i] = brainMask[i] ? currentData[i] : 0;
+      }
+      const betNifti = createFloat32Nifti(maskedPreview, headerBytes, currentDims, currentSpacing);
+      postStageData('bet', betNifti, 'Brain extraction (BET)');
+    } catch (e) {
+      postLog(`Warning: Brain extraction failed: ${e.message}`);
+      brainMask = null;
+    }
+  } else {
+    postLog('Preprocessing WASM not available - skipping brain extraction');
+  }
+
+  // 4. Process centered slice subsection (axial Z range) in native RAS space
   const subsectionFraction = Math.max(0.01, Math.min(1, Number.isFinite(sliceSubsectionFraction) ? sliceSubsectionFraction : DEFAULT_SLICE_SUBSECTION_FRACTION));
   const sliceSubsection = {
     applied: false,
@@ -866,12 +915,18 @@ async function runInference(config) {
     endZ: rasDims[2]
   };
   if (subsectionFraction < 0.999) {
-    const subsection = extractSliceSubsection(currentData, currentDims, subsectionFraction);
+    const subsection = extractSliceSubsection(currentData, currentDims, subsectionFraction, Float32Array);
     currentData = subsection.data;
     currentDims = subsection.dims;
     sliceSubsection.applied = true;
     sliceSubsection.startZ = subsection.startZ;
     sliceSubsection.endZ = subsection.endZ;
+
+    if (brainMask) {
+      const maskSubset = extractSliceRange(brainMask, rasDims, subsection.startZ, subsection.endZ, Uint8Array);
+      brainMask = maskSubset.data;
+    }
+
     postLog(
       `Subsection: z=${subsection.startZ}-${subsection.endZ - 1} `
       + `(${currentDims[2]}/${rasDims[2]} slices, ${(subsection.fraction * 100).toFixed(0)}%)`
@@ -881,8 +936,8 @@ async function runInference(config) {
   }
   const rasProcessingDims = [...currentDims];
 
-  // 4. Resample selected subsection to fixed 0.3mm spacing
-  postProgress(0.05, 'Resampling...');
+  // 5. Resample selected subsection to fixed 0.3mm spacing
+  postProgress(0.07, 'Resampling...');
   const targetSpacing = FIXED_TARGET_SPACING;
   const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
 
@@ -917,7 +972,7 @@ async function runInference(config) {
   }
   const processingDims = [...currentDims];
 
-  // 5. Brain extraction (BET)
+  // 6. Processing-size sanity check
   const totalVoxelsPreproc = currentDims[0] * currentDims[1] * currentDims[2];
   const volumeSizeMB = Math.round(totalVoxelsPreproc * 4 / (1024 * 1024));
   if (totalVoxelsPreproc > MAX_PROCESSING_VOXELS) {
@@ -927,51 +982,7 @@ async function runInference(config) {
     );
   }
 
-  // BET: compute brain mask for final output masking (does NOT modify input data)
-  let brainMask = null;
-  if (self._wasmReady) {
-    postProgress(0.06, 'Brain extraction (BET)...');
-    postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
-    try {
-      const progressCb = (current, total) => {
-        const pct = Math.round((current / total) * 100);
-        if (pct % 10 === 0) {
-          postProgress(0.06 + 0.06 * (current / total), `BET: ${pct}%`);
-        }
-      };
-
-      // Pass Float32 directly - Rust converts to f64 internally
-      brainMask = wasm_bindgen.bet_brain_extract(
-        currentData,
-        currentDims[0], currentDims[1], currentDims[2],
-        currentSpacing[0], currentSpacing[1], currentSpacing[2],
-        fractionalIntensity,
-        progressCb
-      );
-
-      let maskCount = 0;
-      for (let i = 0; i < brainMask.length; i++) {
-        if (brainMask[i]) maskCount++;
-      }
-      const coverage = (100 * maskCount / currentData.length).toFixed(1);
-      postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
-
-      // Emit brain mask as stage (show masked volume for visualization)
-      const maskedPreview = new Float32Array(currentData.length);
-      for (let i = 0; i < currentData.length; i++) {
-        maskedPreview[i] = brainMask[i] ? currentData[i] : 0;
-      }
-      const betNifti = createFloat32Nifti(maskedPreview, headerBytes, currentDims, currentSpacing);
-      postStageData('bet', betNifti, 'Brain extraction (BET)');
-    } catch (e) {
-      postLog(`Warning: Brain extraction failed: ${e.message}`);
-      brainMask = null;
-    }
-  } else {
-    postLog('Preprocessing WASM not available - skipping brain extraction');
-  }
-
-  // 6. WASM Preprocessing (bias correction + denoising)
+  // 7. WASM Preprocessing (bias correction + denoising)
   if (self._wasmReady && (biasCorrection || denoising)) {
     if (biasCorrection) {
       postProgress(0.08, 'Bias field correction (N4ITK)...');
@@ -1015,12 +1026,12 @@ async function runInference(config) {
     postLog('Preprocessing WASM not available - skipping bias correction and denoising');
   }
 
-  // 7. Normalize
+  // 8. Normalize
   postProgress(0.15, 'Normalizing...');
   postLog('Z-score normalizing (nonzero voxels)...');
   currentData = zScoreNormalizeNonzero(currentData);
 
-  // 8. Crop foreground
+  // 9. Crop foreground
   postProgress(0.17, 'Cropping foreground...');
   const cropped = cropForeground(currentData, currentDims, CROP_MARGIN);
   if (cropped.dims[0] === 0) {
@@ -1031,7 +1042,7 @@ async function runInference(config) {
   const cropOrigin = cropped.origin;
   postLog(`Cropped: ${currentDims.join('x')} (origin: ${cropOrigin.join(',')})`);
 
-  // 9. Download and load model
+  // 10. Download and load model
   const modelUrl = `${modelBaseUrl}/${modelName}`;
   const modelData = await fetchModel(modelUrl, modelName, 0.20, 0.15);
 
@@ -1045,7 +1056,7 @@ async function runInference(config) {
   });
   postLog(`Session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 10. 3D Sliding Window Inference
+  // 11. 3D Sliding Window Inference
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_D, PATCH_H, PATCH_W, 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_D, PATCH_H, PATCH_W], overlap);
   const totalPatches = positions.length;
@@ -1101,7 +1112,7 @@ async function runInference(config) {
   // Release session
   await session.release();
 
-  // 11. Threshold and binarize
+  // 12. Threshold and binarize
   postProgress(0.84, 'Thresholding...');
   postLog(`Thresholding at p=${probabilityThreshold}...`);
   const binaryMask = new Uint8Array(totalVoxels);
@@ -1114,7 +1125,7 @@ async function runInference(config) {
     }
   }
 
-  // 12. Remove small connected components
+  // 13. Remove small connected components
   postProgress(0.87, 'Removing small components...');
   postLog(`Removing components smaller than ${minComponentSize} voxels...`);
   const cleanedMask = removeSmallComponents(binaryMask, currentDims, minComponentSize);
@@ -1125,12 +1136,17 @@ async function runInference(config) {
   }
   postLog(`Segmented voxels: ${totalSegmented}`);
 
-  // 13. Inverse transform: uncrop
+  // 14. Inverse transform: uncrop
   postProgress(0.92, 'Inverse transform...');
   postLog('Applying inverse transforms...');
   let outputLabels = uncrop(cleanedMask, currentDims, processingDims, cropOrigin);
 
-  // Apply brain mask to segmentation (at processing resolution, before reinsertion)
+  // Inverse resample (nearest neighbor) back to native RAS subsection dims
+  if (needsResample) {
+    outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
+  }
+
+  // Apply brain mask in native RAS subsection space before reinsertion
   if (brainMask) {
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
@@ -1144,11 +1160,6 @@ async function runInference(config) {
     }
   }
 
-  // Inverse resample (nearest neighbor) back to native RAS subsection dims
-  if (needsResample) {
-    outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
-  }
-
   // Reinsert subsection into full RAS grid before inverse orientation
   if (sliceSubsection.applied) {
     outputLabels = embedSliceSubsection(outputLabels, rasProcessingDims, rasDims, sliceSubsection.startZ);
@@ -1159,7 +1170,7 @@ async function runInference(config) {
     outputLabels = inverseOrient(outputLabels, rasDims, perm, flip, origDims);
   }
 
-  // 14. Create output NIfTI
+  // 15. Create output NIfTI
   const outputNifti = createOutputNifti(outputLabels, headerBytes, origDims);
   postStageData('segmentation', outputNifti, 'Vessel segmentation');
 
