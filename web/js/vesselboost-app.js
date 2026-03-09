@@ -492,7 +492,7 @@ class VesselBoostApp {
 
     const subsectionInput = document.getElementById('subsectionInput');
     const subsectionPercent = subsectionInput ? parseFloat(subsectionInput.value) : (Config.INFERENCE_DEFAULTS.sliceSubsectionFraction * 100);
-    const sliceSubsectionFraction = Math.max(0.05, Math.min(1, (Number.isFinite(subsectionPercent) ? subsectionPercent : 30) / 100));
+    const sliceSubsectionFraction = Math.max(0.01, Math.min(1, (Number.isFinite(subsectionPercent) ? subsectionPercent : 30) / 100));
 
     const biasCorrToggle = document.getElementById('biasCorrToggle');
     const biasCorrection = biasCorrToggle ? biasCorrToggle.checked : Config.INFERENCE_DEFAULTS.biasCorrection;

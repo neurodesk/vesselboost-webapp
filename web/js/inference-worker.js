@@ -2,8 +2,8 @@
  * VesselBoost Inference Worker
  *
  * Runs ONNX model inference for 3D patch-based vessel segmentation.
- * Pipeline: NIfTI parse -> orient to RAS -> resample to 0.3mm ->
- *           centered slice subsection -> BET brain extraction (WASM) ->
+ * Pipeline: NIfTI parse -> orient to RAS -> centered slice subsection ->
+ *           resample subsection to 0.3mm -> BET brain extraction (WASM) ->
  *           N4ITK bias correction (WASM) ->
  *           NLM denoising (WASM) -> z-score normalize -> foreground crop ->
  *           3D sliding window inference -> threshold -> remove small components ->
@@ -26,7 +26,8 @@ try {
 }
 
 const FIXED_TARGET_SPACING = [0.3, 0.3, 0.3];
-const DEFAULT_SLICE_SUBSECTION_FRACTION = 0.3;
+const DEFAULT_SLICE_SUBSECTION_FRACTION = 0.1;
+const MAX_PROCESSING_VOXELS = 100 * 1024 * 1024;
 
 // ==================== Message Helpers ====================
 
@@ -314,13 +315,17 @@ function orientToRAS(data, dims, perm, flip) {
   return { data: result, dims: dstDims };
 }
 
+function computeResampledDims(dims, srcSpacing, tgtSpacing) {
+  return [
+    Math.max(1, Math.round(dims[0] * srcSpacing[0] / tgtSpacing[0])),
+    Math.max(1, Math.round(dims[1] * srcSpacing[1] / tgtSpacing[1])),
+    Math.max(1, Math.round(dims[2] * srcSpacing[2] / tgtSpacing[2]))
+  ];
+}
+
 function resampleVolume(data, dims, srcSpacing, tgtSpacing) {
   const [nx, ny, nz] = dims;
-  const newDims = [
-    Math.round(nx * srcSpacing[0] / tgtSpacing[0]),
-    Math.round(ny * srcSpacing[1] / tgtSpacing[1]),
-    Math.round(nz * srcSpacing[2] / tgtSpacing[2])
-  ];
+  const newDims = computeResampledDims(dims, srcSpacing, tgtSpacing);
   const [nnx, nny, nnz] = newDims;
   const result = new Float32Array(nnx * nny * nnz);
 
@@ -370,7 +375,7 @@ function resampleVolume(data, dims, srcSpacing, tgtSpacing) {
 
 function extractSliceSubsection(data, dims, fraction) {
   const [nx, ny, nz] = dims;
-  const clampedFraction = Math.max(0.05, Math.min(1, Number.isFinite(fraction) ? fraction : 1));
+  const clampedFraction = Math.max(0.01, Math.min(1, Number.isFinite(fraction) ? fraction : 1));
   const subsetNz = Math.max(1, Math.min(nz, Math.round(nz * clampedFraction)));
   const startZ = Math.max(0, Math.floor((nz - subsetNz) / 2));
   const endZ = startZ + subsetNz;
@@ -853,27 +858,12 @@ async function runInference(config) {
 
   const rasDims = [...currentDims];
 
-  // 3. Resample to fixed 0.3mm spacing (before preprocessing for speed)
-  postProgress(0.05, 'Resampling...');
-  const targetSpacing = FIXED_TARGET_SPACING;
-  const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
-
-  if (needsResample) {
-    postLog(`Resampling to ${targetSpacing.map(s => s.toFixed(2)).join('x')}mm...`);
-    const resampled = resampleVolume(currentData, currentDims, currentSpacing, targetSpacing);
-    currentData = resampled.data;
-    currentDims = resampled.dims;
-    currentSpacing = resampled.spacing;
-    postLog(`Resampled: ${currentDims.join('x')}`);
-  }
-  const fullResampledDims = [...currentDims];
-
-  // 4. Process centered slice subsection (axial Z range)
-  const subsectionFraction = Math.max(0.05, Math.min(1, Number.isFinite(sliceSubsectionFraction) ? sliceSubsectionFraction : DEFAULT_SLICE_SUBSECTION_FRACTION));
+  // 3. Process centered slice subsection (axial Z range) in native RAS space
+  const subsectionFraction = Math.max(0.01, Math.min(1, Number.isFinite(sliceSubsectionFraction) ? sliceSubsectionFraction : DEFAULT_SLICE_SUBSECTION_FRACTION));
   const sliceSubsection = {
     applied: false,
     startZ: 0,
-    endZ: fullResampledDims[2]
+    endZ: rasDims[2]
   };
   if (subsectionFraction < 0.999) {
     const subsection = extractSliceSubsection(currentData, currentDims, subsectionFraction);
@@ -884,18 +874,53 @@ async function runInference(config) {
     sliceSubsection.endZ = subsection.endZ;
     postLog(
       `Subsection: z=${subsection.startZ}-${subsection.endZ - 1} `
-      + `(${currentDims[2]}/${fullResampledDims[2]} slices, ${(subsection.fraction * 100).toFixed(0)}%)`
+      + `(${currentDims[2]}/${rasDims[2]} slices, ${(subsection.fraction * 100).toFixed(0)}%)`
     );
   } else {
     postLog('Subsection: using full slice range (100%)');
+  }
+  const rasProcessingDims = [...currentDims];
+
+  // 4. Resample selected subsection to fixed 0.3mm spacing
+  postProgress(0.05, 'Resampling...');
+  const targetSpacing = FIXED_TARGET_SPACING;
+  const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
+
+  if (needsResample) {
+    const projectedDims = computeResampledDims(currentDims, currentSpacing, targetSpacing);
+    const projectedVoxels = projectedDims[0] * projectedDims[1] * projectedDims[2];
+    if (projectedVoxels > MAX_PROCESSING_VOXELS) {
+      const suggestedFraction = Math.max(
+        0.01,
+        subsectionFraction * (MAX_PROCESSING_VOXELS / projectedVoxels)
+      );
+      const suggestedPercent = Math.max(1, Math.min(100, Math.floor(suggestedFraction * 100)));
+      throw new Error(
+        `Selected subsection is too large at 0.3mm (${projectedDims.join('x')}, ${(projectedVoxels / 1e6).toFixed(0)}M voxels). `
+        + `Reduce Slice Subsection (%) to about ${suggestedPercent}% or less.`
+      );
+    }
+
+    postLog(`Resampling to ${targetSpacing.map(s => s.toFixed(2)).join('x')}mm...`);
+    try {
+      const resampled = resampleVolume(currentData, currentDims, currentSpacing, targetSpacing);
+      currentData = resampled.data;
+      currentDims = resampled.dims;
+      currentSpacing = resampled.spacing;
+      postLog(`Resampled: ${currentDims.join('x')}`);
+    } catch (e) {
+      if (e?.message && /Array buffer allocation failed|Invalid typed array length/i.test(e.message)) {
+        throw new Error('Resampling ran out of memory. Reduce Slice Subsection (%) and try again.');
+      }
+      throw e;
+    }
   }
   const processingDims = [...currentDims];
 
   // 5. Brain extraction (BET)
   const totalVoxelsPreproc = currentDims[0] * currentDims[1] * currentDims[2];
   const volumeSizeMB = Math.round(totalVoxelsPreproc * 4 / (1024 * 1024));
-  const maxWasmVoxels = 100 * 1024 * 1024; // ~100M voxels (~400MB Float32, ~800MB Float64)
-  if (totalVoxelsPreproc > maxWasmVoxels) {
+  if (totalVoxelsPreproc > MAX_PROCESSING_VOXELS) {
     postLog(
       `Warning: Processing volume is very large (${(totalVoxelsPreproc / 1e6).toFixed(0)}M voxels, ~${volumeSizeMB}MB). `
       + 'Preprocessing may fail or run slowly. Consider reducing slice subsection percentage.'
@@ -1119,14 +1144,14 @@ async function runInference(config) {
     }
   }
 
-  // Reinsert subsection into full resampled grid before inverse transforms
-  if (sliceSubsection.applied) {
-    outputLabels = embedSliceSubsection(outputLabels, processingDims, fullResampledDims, sliceSubsection.startZ);
+  // Inverse resample (nearest neighbor) back to native RAS subsection dims
+  if (needsResample) {
+    outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
   }
 
-  // Inverse resample (nearest neighbor)
-  if (needsResample) {
-    outputLabels = resampleLabelsNearest(outputLabels, fullResampledDims, rasDims);
+  // Reinsert subsection into full RAS grid before inverse orientation
+  if (sliceSubsection.applied) {
+    outputLabels = embedSliceSubsection(outputLabels, rasProcessingDims, rasDims, sliceSubsection.startZ);
   }
 
   // Inverse orient

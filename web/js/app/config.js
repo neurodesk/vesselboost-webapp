@@ -11,7 +11,7 @@ export const MODEL = {
 };
 
 export const INFERENCE_DEFAULTS = {
-  sliceSubsectionFraction: 0.3,
+  sliceSubsectionFraction: 0.1,
   cropForegroundMargin: 20,
   overlap: 0.5,
   probabilityThreshold: 0.1,
