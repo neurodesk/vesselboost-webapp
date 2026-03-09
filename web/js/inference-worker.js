@@ -3,9 +3,10 @@
  *
  * Runs ONNX model inference for 3D patch-based vessel segmentation.
  * Pipeline: NIfTI parse -> orient to RAS -> BET brain extraction (WASM) ->
+ *           N4ITK bias correction (WASM, full volume) ->
  *           centered slice subsection (image + mask) ->
- *           resample subsection to 0.3mm -> N4ITK bias correction (WASM) ->
- *           NLM denoising (WASM) -> z-score normalize -> foreground crop ->
+ *           NLM denoising (WASM, subsection) -> resample subsection to 0.3mm ->
+ *           z-score normalize -> foreground crop ->
  *           3D sliding window inference -> threshold -> remove small components ->
  *           inverse transforms -> output NIfTI
  */
@@ -907,7 +908,39 @@ async function runInference(config) {
     postLog('Preprocessing WASM not available - skipping brain extraction');
   }
 
-  // 4. Process centered slice subsection (axial Z range) in native RAS space
+  // 4. Bias field correction (N4ITK) on full RAS volume
+  if (biasCorrection) {
+    if (self._wasmReady) {
+      const fullVoxels = currentDims[0] * currentDims[1] * currentDims[2];
+      if (fullVoxels > MAX_PROCESSING_VOXELS) {
+        postLog(
+          `Warning: Full-volume N4 input is large (${(fullVoxels / 1e6).toFixed(0)}M voxels). `
+          + 'Bias correction may run slowly or fail.'
+        );
+      }
+
+      postProgress(0.08, 'Bias field correction (N4ITK)...');
+      postLog('Running N4ITK bias field correction on full RAS volume...');
+      try {
+        const corrected = wasm_bindgen.n4_bias_correct(
+          currentData, currentDims[0], currentDims[1], currentDims[2],
+          currentSpacing[0], currentSpacing[1], currentSpacing[2],
+          4, 50, 0.001
+        );
+        currentData = corrected;
+        postLog('Bias field correction complete');
+
+        const n4Nifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+        postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
+      } catch (e) {
+        postLog(`Warning: Bias correction failed: ${e.message}`);
+      }
+    } else {
+      postLog('Preprocessing WASM not available - skipping bias correction');
+    }
+  }
+
+  // 5. Process centered slice subsection (axial Z range) in native RAS space
   const subsectionFraction = Math.max(0.01, Math.min(1, Number.isFinite(sliceSubsectionFraction) ? sliceSubsectionFraction : DEFAULT_SLICE_SUBSECTION_FRACTION));
   const sliceSubsection = {
     applied: false,
@@ -936,8 +969,31 @@ async function runInference(config) {
   }
   const rasProcessingDims = [...currentDims];
 
-  // 5. Resample selected subsection to fixed 0.3mm spacing
-  postProgress(0.07, 'Resampling...');
+  // 6. Denoising (NLM) on subsection before 0.3mm resampling
+  if (denoising) {
+    if (self._wasmReady) {
+      postProgress(0.11, 'Denoising (NLM)...');
+      postLog('Running non-local means denoising on subsection...');
+      try {
+        const denoised = wasm_bindgen.nlm_denoise(
+          currentData, currentDims[0], currentDims[1], currentDims[2],
+          5, 1, 0.0
+        );
+        currentData = denoised;
+        postLog('Denoising complete');
+
+        const nlmNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+        postStageData('nlm', nlmNifti, 'Denoising (NLM)');
+      } catch (e) {
+        postLog(`Warning: Denoising failed: ${e.message}`);
+      }
+    } else {
+      postLog('Preprocessing WASM not available - skipping denoising');
+    }
+  }
+
+  // 7. Resample selected subsection to fixed 0.3mm spacing
+  postProgress(0.15, 'Resampling...');
   const targetSpacing = FIXED_TARGET_SPACING;
   const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
 
@@ -972,7 +1028,7 @@ async function runInference(config) {
   }
   const processingDims = [...currentDims];
 
-  // 6. Processing-size sanity check
+  // 8. Processing-size sanity check
   const totalVoxelsPreproc = currentDims[0] * currentDims[1] * currentDims[2];
   const volumeSizeMB = Math.round(totalVoxelsPreproc * 4 / (1024 * 1024));
   if (totalVoxelsPreproc > MAX_PROCESSING_VOXELS) {
@@ -982,57 +1038,13 @@ async function runInference(config) {
     );
   }
 
-  // 7. WASM Preprocessing (bias correction + denoising)
-  if (self._wasmReady && (biasCorrection || denoising)) {
-    if (biasCorrection) {
-      postProgress(0.08, 'Bias field correction (N4ITK)...');
-      postLog('Running N4ITK bias field correction...');
-      try {
-        const corrected = wasm_bindgen.n4_bias_correct(
-          currentData, currentDims[0], currentDims[1], currentDims[2],
-          currentSpacing[0], currentSpacing[1], currentSpacing[2],
-          4, 50, 0.001
-        );
-        currentData = corrected;
-        postLog('Bias field correction complete');
-
-        // Emit bias-corrected volume as stage
-        const n4Nifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
-        postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
-      } catch (e) {
-        postLog(`Warning: Bias correction failed: ${e.message}`);
-      }
-    }
-
-    if (denoising) {
-      postProgress(0.12, 'Denoising (NLM)...');
-      postLog('Running non-local means denoising...');
-      try {
-        const denoised = wasm_bindgen.nlm_denoise(
-          currentData, currentDims[0], currentDims[1], currentDims[2],
-          5, 1, 0.0
-        );
-        currentData = denoised;
-        postLog('Denoising complete');
-
-        // Emit denoised volume as stage
-        const nlmNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
-        postStageData('nlm', nlmNifti, 'Denoising (NLM)');
-      } catch (e) {
-        postLog(`Warning: Denoising failed: ${e.message}`);
-      }
-    }
-  } else if (biasCorrection || denoising) {
-    postLog('Preprocessing WASM not available - skipping bias correction and denoising');
-  }
-
-  // 8. Normalize
-  postProgress(0.15, 'Normalizing...');
+  // 9. Normalize
+  postProgress(0.18, 'Normalizing...');
   postLog('Z-score normalizing (nonzero voxels)...');
   currentData = zScoreNormalizeNonzero(currentData);
 
-  // 9. Crop foreground
-  postProgress(0.17, 'Cropping foreground...');
+  // 10. Crop foreground
+  postProgress(0.20, 'Cropping foreground...');
   const cropped = cropForeground(currentData, currentDims, CROP_MARGIN);
   if (cropped.dims[0] === 0) {
     throw new Error('No foreground voxels found in volume');
@@ -1042,7 +1054,7 @@ async function runInference(config) {
   const cropOrigin = cropped.origin;
   postLog(`Cropped: ${currentDims.join('x')} (origin: ${cropOrigin.join(',')})`);
 
-  // 10. Download and load model
+  // 11. Download and load model
   const modelUrl = `${modelBaseUrl}/${modelName}`;
   const modelData = await fetchModel(modelUrl, modelName, 0.20, 0.15);
 
@@ -1056,7 +1068,7 @@ async function runInference(config) {
   });
   postLog(`Session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 11. 3D Sliding Window Inference
+  // 12. 3D Sliding Window Inference
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_D, PATCH_H, PATCH_W, 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_D, PATCH_H, PATCH_W], overlap);
   const totalPatches = positions.length;
@@ -1112,7 +1124,7 @@ async function runInference(config) {
   // Release session
   await session.release();
 
-  // 12. Threshold and binarize
+  // 13. Threshold and binarize
   postProgress(0.84, 'Thresholding...');
   postLog(`Thresholding at p=${probabilityThreshold}...`);
   const binaryMask = new Uint8Array(totalVoxels);
@@ -1125,7 +1137,7 @@ async function runInference(config) {
     }
   }
 
-  // 13. Remove small connected components
+  // 14. Remove small connected components
   postProgress(0.87, 'Removing small components...');
   postLog(`Removing components smaller than ${minComponentSize} voxels...`);
   const cleanedMask = removeSmallComponents(binaryMask, currentDims, minComponentSize);
@@ -1136,7 +1148,7 @@ async function runInference(config) {
   }
   postLog(`Segmented voxels: ${totalSegmented}`);
 
-  // 14. Inverse transform: uncrop
+  // 15. Inverse transform: uncrop
   postProgress(0.92, 'Inverse transform...');
   postLog('Applying inverse transforms...');
   let outputLabels = uncrop(cleanedMask, currentDims, processingDims, cropOrigin);
@@ -1170,7 +1182,7 @@ async function runInference(config) {
     outputLabels = inverseOrient(outputLabels, rasDims, perm, flip, origDims);
   }
 
-  // 15. Create output NIfTI
+  // 16. Create output NIfTI
   const outputNifti = createOutputNifti(outputLabels, headerBytes, origDims);
   postStageData('segmentation', outputNifti, 'Vessel segmentation');
 
