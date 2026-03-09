@@ -39,6 +39,7 @@ export const STAGE_NAMES = {
   'input': 'Input',
   'bet': 'Brain Extraction',
   'n4': 'Bias Correction',
+  'subsection': 'Slice Subsection',
   'nlm': 'Denoising',
   'segmentation': 'Segmentation'
 };

@@ -975,6 +975,12 @@ async function runInference(config) {
   }
   const rasProcessingDims = [...currentDims];
 
+  const subsectionDescription = sliceSubsection.applied
+    ? `Slice subsection for inference (z=${sliceSubsection.startZ}-${sliceSubsection.endZ - 1})`
+    : 'Slice subsection for inference (full slice range)';
+  const subsectionNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
+  postStageData('subsection', subsectionNifti, subsectionDescription);
+
   // 6. Denoising (NLM) on subsection before 0.3mm resampling
   if (denoising) {
     if (self._wasmReady) {
