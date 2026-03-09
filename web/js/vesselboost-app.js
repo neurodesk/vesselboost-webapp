@@ -490,9 +490,9 @@ class VesselBoostApp {
     const minSizeInput = document.getElementById('minSizeInput');
     const minComponentSize = minSizeInput ? parseInt(minSizeInput.value, 10) : Config.INFERENCE_DEFAULTS.minComponentSize;
 
-    const spacingInput = document.getElementById('spacingInput');
-    const targetSpacingVal = spacingInput ? parseFloat(spacingInput.value) : Config.INFERENCE_DEFAULTS.targetSpacing[0];
-    const targetSpacing = [targetSpacingVal, targetSpacingVal, targetSpacingVal];
+    const subsectionInput = document.getElementById('subsectionInput');
+    const subsectionPercent = subsectionInput ? parseFloat(subsectionInput.value) : (Config.INFERENCE_DEFAULTS.sliceSubsectionFraction * 100);
+    const sliceSubsectionFraction = Math.max(0.05, Math.min(1, (Number.isFinite(subsectionPercent) ? subsectionPercent : 30) / 100));
 
     const biasCorrToggle = document.getElementById('biasCorrToggle');
     const biasCorrection = biasCorrToggle ? biasCorrToggle.checked : Config.INFERENCE_DEFAULTS.biasCorrection;
@@ -523,7 +523,7 @@ class VesselBoostApp {
         overlap,
         probabilityThreshold,
         minComponentSize,
-        targetSpacing,
+        sliceSubsectionFraction,
         biasCorrection,
         denoising,
         fractionalIntensity,

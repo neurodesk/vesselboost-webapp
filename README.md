@@ -23,7 +23,7 @@ bash run.sh
 - **Binary vessel segmentation** (vessel/background)
 - **DICOM and NIfTI** input support
 - **Preprocessing**: N4ITK bias field correction + non-local means denoising (Rust/WASM)
-- **Configurable**: target spacing, overlap, probability threshold, component size filtering
+- **Configurable**: slice subsection, overlap, probability threshold, component size filtering
 - **Privacy**: all processing happens locally in the browser
 
 ## Model Conversion
@@ -81,15 +81,16 @@ vesselboost-webapp/
 
 1. Parse NIfTI / convert DICOM
 2. Orient to RAS
-3. Resample to target spacing (default 0.3mm isotropic)
-4. N4ITK bias field correction (WASM, optional)
-5. Non-local means denoising (WASM, optional)
-6. Z-score normalize
-7. Crop foreground
-8. 3D sliding window inference (ONNX Runtime Web)
-9. Threshold probabilities
-10. Remove small connected components
-11. Inverse transforms -> output NIfTI
+3. Resample to fixed 0.3mm isotropic spacing
+4. Select centered slice subsection for processing
+5. N4ITK bias field correction (WASM, optional)
+6. Non-local means denoising (WASM, optional)
+7. Z-score normalize
+8. Crop foreground
+9. 3D sliding window inference (ONNX Runtime Web)
+10. Threshold probabilities
+11. Remove small connected components
+12. Inverse transforms -> output NIfTI
 
 ## Citations
 
