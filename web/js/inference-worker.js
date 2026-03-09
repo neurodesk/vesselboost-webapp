@@ -2,13 +2,13 @@
  * VesselBoost Inference Worker
  *
  * Runs ONNX model inference for 3D patch-based vessel segmentation.
- * Pipeline: NIfTI parse -> orient to RAS -> BET brain extraction (WASM) ->
- *           N4ITK bias correction (WASM, full volume) ->
- *           centered slice subsection (image + mask) ->
- *           NLM denoising (WASM, subsection) -> resample subsection to 0.3mm ->
- *           z-score normalize -> foreground crop ->
- *           3D sliding window inference -> threshold -> remove small components ->
- *           inverse transforms -> output NIfTI
+ * Pipeline is split into interactive steps:
+ *   1. Load (NIfTI parse + orient to RAS)
+ *   2. N4 bias field correction (optional)
+ *   3. BET brain extraction
+ *   4. Slice range selection
+ *   5. NLM denoising (optional)
+ *   6. Inference (resample → normalize → crop → sliding window → threshold → CC → inverse)
  */
 
 /* global importScripts, ort, localforage, nifti, wasm_bindgen */
@@ -27,8 +27,47 @@ try {
 }
 
 const FIXED_TARGET_SPACING = [0.3, 0.3, 0.3];
-const DEFAULT_SLICE_SUBSECTION_FRACTION = 0.1;
 const MAX_PROCESSING_VOXELS = 100 * 1024 * 1024;
+
+// ==================== Shared Worker State ====================
+
+let workerState = {
+  headerBytes: null,
+  origDims: null,
+  affine: null,
+  perm: null,
+  flip: null,
+  isIdentity: null,
+  rasData: null,
+  rasDims: null,
+  rasSpacing: null,
+  brainMask: null,
+  sliceStartZ: null,
+  sliceEndZ: null,
+  subsectionData: null,
+  subsectionDims: null,
+  denoisedData: null
+};
+
+function resetState() {
+  workerState = {
+    headerBytes: null,
+    origDims: null,
+    affine: null,
+    perm: null,
+    flip: null,
+    isIdentity: null,
+    rasData: null,
+    rasDims: null,
+    rasSpacing: null,
+    brainMask: null,
+    sliceStartZ: null,
+    sliceEndZ: null,
+    subsectionData: null,
+    subsectionDims: null,
+    denoisedData: null
+  };
+}
 
 // ==================== Message Helpers ====================
 
@@ -53,6 +92,14 @@ function postStageData(stage, niftiData, description) {
     { type: 'stageData', stage, niftiData, description },
     [niftiData]
   );
+}
+
+function postStepComplete(step) {
+  self.postMessage({ type: 'step-complete', step });
+}
+
+function postVolumeInfo(info) {
+  self.postMessage({ type: 'volume-info', ...info });
 }
 
 // ==================== NIfTI Parsing ====================
@@ -389,22 +436,6 @@ function extractSliceRange(data, dims, startZ, endZ, outputCtor = Float32Array) 
   return { data: result, dims: [nx, ny, subsetNz] };
 }
 
-function extractSliceSubsection(data, dims, fraction, outputCtor = Float32Array) {
-  const [nx, ny, nz] = dims;
-  const clampedFraction = Math.max(0.01, Math.min(1, Number.isFinite(fraction) ? fraction : 1));
-  const subsetNz = Math.max(1, Math.min(nz, Math.round(nz * clampedFraction)));
-  const startZ = Math.max(0, Math.floor((nz - subsetNz) / 2));
-  const endZ = startZ + subsetNz;
-  const extracted = extractSliceRange(data, dims, startZ, endZ, outputCtor);
-  return {
-    data: extracted.data,
-    dims: [nx, ny, subsetNz],
-    startZ,
-    endZ,
-    fraction: clampedFraction
-  };
-}
-
 function embedSliceSubsection(data, subsectionDims, fullDims, startZ) {
   const [nx, ny, nz] = subsectionDims;
   const [fnx, fny, fnz] = fullDims;
@@ -509,12 +540,6 @@ function computePatchPositions3D(volumeDims, patchDims, overlap) {
   const positions = [];
   const seen = new Set();
 
-  for (let axis = 0; axis < 3; axis++) {
-    if (volumeDims[axis] < patchDims[axis]) {
-      // Volume smaller than patch on this axis - will pad
-    }
-  }
-
   const steps = patchDims.map(p => Math.max(1, Math.round(p * (1 - overlap))));
 
   const counts = volumeDims.map((vd, i) => {
@@ -552,8 +577,6 @@ function extractPatch3D(volume, volumeDims, position, patchDims) {
   const [o0, o1, o2] = position;
   const patch = new Float32Array(p0 * p1 * p2);
 
-  // Match the original VesselBoost NumPy/PyTorch array order:
-  // for a tensor shaped [dim0, dim1, dim2], dim2 is contiguous in memory.
   for (let i0 = 0; i0 < p0; i0++) {
     const g0 = o0 + i0;
     if (g0 < 0 || g0 >= v0) continue;
@@ -675,13 +698,11 @@ function removeSmallComponents(binaryMask, dims, minSize) {
 
   if (numComponents === 0) return binaryMask;
 
-  // Count component sizes
   const sizes = new Int32Array(numComponents + 1);
   for (let i = 0; i < n; i++) {
     if (labels[i] > 0) sizes[labels[i]]++;
   }
 
-  // Build result keeping only components >= minSize
   const result = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     if (labels[i] > 0 && sizes[labels[i]] >= minSize) {
@@ -820,57 +841,43 @@ function getOptimalWasmThreads() {
   return (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
 }
 
-// ==================== Main Inference Pipeline ====================
+// ==================== Step Functions ====================
 
-async function runInference(config) {
-  const { inputData, settings } = config;
-  const {
-    modelName = 'vesselboost.onnx',
-    patchSize = [64, 64, 64],
-    overlap = 0.5,
-    probabilityThreshold = 0.1,
-    minComponentSize = 10,
-    sliceSubsectionFraction = DEFAULT_SLICE_SUBSECTION_FRACTION,
-    biasCorrection = true,
-    denoising = true,
-    fractionalIntensity = 0.5,
-    modelBaseUrl
-  } = settings;
-
-  const [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2] = patchSize;
-  const CROP_MARGIN = 20;
-
-  // 1. Parse NIfTI
+function stepLoad(inputData) {
   postLog('Parsing input volume...');
   postProgress(0.02, 'Reading NIfTI...');
   const { imageData, dims, voxelSize, headerBytes, affine } = parseNiftiInput(inputData);
   const [nx, ny, nz] = dims;
   postLog(`Volume: ${nx}x${ny}x${nz}, spacing: ${voxelSize.map(v => v.toFixed(3)).join('x')}mm`);
 
-  const origDims = [...dims];
+  workerState.origDims = [...dims];
+  workerState.affine = affine;
+  workerState.headerBytes = headerBytes;
 
-  // 2. Orient to RAS
+  // Orient to RAS
   postProgress(0.04, 'Orienting to RAS...');
   postLog('Orienting to RAS...');
   const { perm, flip } = getOrientationTransform(affine);
   const isIdentity = perm[0] === 0 && perm[1] === 1 && perm[2] === 2 && !flip[0] && !flip[1] && !flip[2];
 
-  let currentData, currentDims, currentSpacing;
+  workerState.perm = perm;
+  workerState.flip = flip;
+  workerState.isIdentity = isIdentity;
+
   if (isIdentity) {
-    currentData = imageData;
-    currentDims = [...dims];
-    currentSpacing = [...voxelSize];
+    workerState.rasData = imageData;
+    workerState.rasDims = [...dims];
+    workerState.rasSpacing = [...voxelSize];
   } else {
     const oriented = orientToRAS(imageData, dims, perm, flip);
-    currentData = oriented.data;
-    currentDims = oriented.dims;
-    currentSpacing = [voxelSize[perm[0]], voxelSize[perm[1]], voxelSize[perm[2]]];
+    workerState.rasData = oriented.data;
+    workerState.rasDims = oriented.dims;
+    workerState.rasSpacing = [voxelSize[perm[0]], voxelSize[perm[1]], voxelSize[perm[2]]];
 
-    // Rewrite headerBytes sform to match the RAS-reoriented data.
-    // Compute origin: physical position of new voxel [0,0,0].
+    // Rewrite headerBytes sform to match the RAS-reoriented data
     const srcVoxel = [0, 0, 0];
     for (let i = 0; i < 3; i++) {
-      srcVoxel[perm[i]] = flip[i] ? (currentDims[i] - 1) : 0;
+      srcVoxel[perm[i]] = flip[i] ? (workerState.rasDims[i] - 1) : 0;
     }
     const origin = [0, 0, 0];
     for (let r = 0; r < 3; r++) {
@@ -881,166 +888,229 @@ async function runInference(config) {
     }
 
     const hdrView = new DataView(headerBytes);
-    // sform_code = 1 (scanner anat)
     hdrView.setInt16(254, 1, true);
-    // srow_x: [sx, 0, 0, ox]
-    hdrView.setFloat32(280, currentSpacing[0], true);
+    hdrView.setFloat32(280, workerState.rasSpacing[0], true);
     hdrView.setFloat32(284, 0, true);
     hdrView.setFloat32(288, 0, true);
     hdrView.setFloat32(292, origin[0], true);
-    // srow_y: [0, sy, 0, oy]
     hdrView.setFloat32(296, 0, true);
-    hdrView.setFloat32(300, currentSpacing[1], true);
+    hdrView.setFloat32(300, workerState.rasSpacing[1], true);
     hdrView.setFloat32(304, 0, true);
     hdrView.setFloat32(308, origin[1], true);
-    // srow_z: [0, 0, sz, oz]
     hdrView.setFloat32(312, 0, true);
     hdrView.setFloat32(316, 0, true);
-    hdrView.setFloat32(320, currentSpacing[2], true);
+    hdrView.setFloat32(320, workerState.rasSpacing[2], true);
     hdrView.setFloat32(324, origin[2], true);
-    // Clear qform so viewer uses sform
     hdrView.setInt16(252, 0, true);
   }
-  postLog(`RAS dims: ${currentDims.join('x')}`);
+  postLog(`RAS dims: ${workerState.rasDims.join('x')}`);
 
-  const rasDims = [...currentDims];
+  // Clear downstream state
+  workerState.brainMask = null;
+  workerState.sliceStartZ = null;
+  workerState.sliceEndZ = null;
+  workerState.subsectionData = null;
+  workerState.subsectionDims = null;
+  workerState.denoisedData = null;
 
-  // 3. Brain extraction (BET) on full RAS volume
-  let brainMask = null;
-  if (self._wasmReady) {
-    postProgress(0.05, 'Brain extraction (BET)...');
-    postLog(`Running BET brain extraction on full RAS volume (fi=${fractionalIntensity})...`);
-    try {
-      const progressCb = (current, total) => {
-        const pct = Math.round((current / total) * 100);
-        if (pct % 10 === 0) {
-          postProgress(0.05 + 0.02 * (current / total), `BET: ${pct}%`);
-        }
-      };
+  // Post volume info for UI
+  postVolumeInfo({
+    rasDims: [...workerState.rasDims],
+    rasSpacing: [...workerState.rasSpacing],
+    totalSlices: workerState.rasDims[2]
+  });
 
-      brainMask = wasm_bindgen.bet_brain_extract(
-        currentData,
-        currentDims[0], currentDims[1], currentDims[2],
-        currentSpacing[0], currentSpacing[1], currentSpacing[2],
-        fractionalIntensity,
-        progressCb
-      );
+  postProgress(1.0, 'Volume loaded');
+  postStepComplete('load');
+}
 
-      let maskCount = 0;
-      for (let i = 0; i < brainMask.length; i++) {
-        if (brainMask[i]) maskCount++;
-      }
-      const coverage = (100 * maskCount / currentData.length).toFixed(1);
-      postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
-
-      // Keep the model input untouched; the mask is retained only for filtering
-      // the final segmentation output and for displaying this intermediate preview.
-      const maskedPreview = new Float32Array(currentData.length);
-      for (let i = 0; i < currentData.length; i++) {
-        maskedPreview[i] = brainMask[i] ? currentData[i] : 0;
-      }
-      const betNifti = createFloat32Nifti(maskedPreview, headerBytes, currentDims, currentSpacing);
-      postStageData('bet', betNifti, 'Brain extraction (BET)');
-    } catch (e) {
-      postLog(`Warning: Brain extraction failed: ${e.message}`);
-      brainMask = null;
-    }
-  } else {
-    postLog('Preprocessing WASM not available - skipping brain extraction');
+function stepN4() {
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
+  }
+  if (!self._wasmReady) {
+    throw new Error('Preprocessing WASM not available');
   }
 
-  // 4. Bias field correction (N4ITK) on full RAS volume
-  if (biasCorrection) {
-    if (self._wasmReady) {
-      const fullVoxels = currentDims[0] * currentDims[1] * currentDims[2];
-      if (fullVoxels > MAX_PROCESSING_VOXELS) {
-        postLog(
-          `Warning: Full-volume N4 input is large (${(fullVoxels / 1e6).toFixed(0)}M voxels). `
-          + 'Bias correction may run slowly or fail.'
-        );
-      }
-
-      postProgress(0.08, 'Bias field correction (N4ITK)...');
-      postLog('Running N4ITK bias field correction on full RAS volume...');
-      try {
-        const corrected = wasm_bindgen.n4_bias_correct(
-          currentData, currentDims[0], currentDims[1], currentDims[2],
-          currentSpacing[0], currentSpacing[1], currentSpacing[2],
-          4, 50, 0.001
-        );
-        currentData = corrected;
-        postLog('Bias field correction complete');
-
-        const n4Nifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
-        postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
-      } catch (e) {
-        postLog(`Warning: Bias correction failed: ${e.message}`);
-      }
-    } else {
-      postLog('Preprocessing WASM not available - skipping bias correction');
-    }
-  }
-
-  // 5. Process centered slice subsection (axial Z range) in native RAS space
-  const subsectionFraction = Math.max(0.01, Math.min(1, Number.isFinite(sliceSubsectionFraction) ? sliceSubsectionFraction : DEFAULT_SLICE_SUBSECTION_FRACTION));
-  const sliceSubsection = {
-    applied: false,
-    startZ: 0,
-    endZ: rasDims[2]
-  };
-  if (subsectionFraction < 0.999) {
-    const subsection = extractSliceSubsection(currentData, currentDims, subsectionFraction, Float32Array);
-    currentData = subsection.data;
-    currentDims = subsection.dims;
-    sliceSubsection.applied = true;
-    sliceSubsection.startZ = subsection.startZ;
-    sliceSubsection.endZ = subsection.endZ;
-
-    if (brainMask) {
-      const maskSubset = extractSliceRange(brainMask, rasDims, subsection.startZ, subsection.endZ, Uint8Array);
-      brainMask = maskSubset.data;
-    }
-
+  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
+  const fullVoxels = rasDims[0] * rasDims[1] * rasDims[2];
+  if (fullVoxels > MAX_PROCESSING_VOXELS) {
     postLog(
-      `Subsection: z=${subsection.startZ}-${subsection.endZ - 1} `
-      + `(${currentDims[2]}/${rasDims[2]} slices, ${(subsection.fraction * 100).toFixed(0)}%)`
+      `Warning: Full-volume N4 input is large (${(fullVoxels / 1e6).toFixed(0)}M voxels). `
+      + 'Bias correction may run slowly or fail.'
     );
-  } else {
-    postLog('Subsection: using full slice range (100%)');
   }
+
+  postProgress(0.1, 'Bias field correction (N4ITK)...');
+  postLog('Running N4ITK bias field correction on full RAS volume...');
+
+  const corrected = wasm_bindgen.n4_bias_correct(
+    rasData, rasDims[0], rasDims[1], rasDims[2],
+    rasSpacing[0], rasSpacing[1], rasSpacing[2],
+    4, 50, 0.001
+  );
+  workerState.rasData = corrected;
+  postLog('Bias field correction complete');
+
+  const n4Nifti = createFloat32Nifti(new Float32Array(corrected), headerBytes, rasDims, rasSpacing);
+  postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
+
+  // Clear downstream state (BET + downstream invalidated)
+  workerState.brainMask = null;
+  workerState.sliceStartZ = null;
+  workerState.sliceEndZ = null;
+  workerState.subsectionData = null;
+  workerState.subsectionDims = null;
+  workerState.denoisedData = null;
+
+  postProgress(1.0, 'N4 complete');
+  postStepComplete('n4');
+}
+
+function stepBET(params) {
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
+  }
+  if (!self._wasmReady) {
+    throw new Error('Preprocessing WASM not available');
+  }
+
+  const fractionalIntensity = params.fractionalIntensity ?? 0.5;
+  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
+
+  postProgress(0.1, 'Brain extraction (BET)...');
+  postLog(`Running BET brain extraction (fi=${fractionalIntensity})...`);
+
+  const progressCb = (current, total) => {
+    const pct = Math.round((current / total) * 100);
+    if (pct % 10 === 0) {
+      postProgress(0.1 + 0.8 * (current / total), `BET: ${pct}%`);
+    }
+  };
+
+  const brainMask = wasm_bindgen.bet_brain_extract(
+    rasData,
+    rasDims[0], rasDims[1], rasDims[2],
+    rasSpacing[0], rasSpacing[1], rasSpacing[2],
+    fractionalIntensity,
+    progressCb
+  );
+
+  let maskCount = 0;
+  for (let i = 0; i < brainMask.length; i++) {
+    if (brainMask[i]) maskCount++;
+  }
+  const coverage = (100 * maskCount / rasData.length).toFixed(1);
+  postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
+
+  workerState.brainMask = brainMask;
+
+  // BET does NOT modify rasData or invalidate downstream - mask is independent
+
+  // Post masked preview
+  const maskedPreview = new Float32Array(rasData.length);
+  for (let i = 0; i < rasData.length; i++) {
+    maskedPreview[i] = brainMask[i] ? rasData[i] : 0;
+  }
+  const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
+  postStageData('bet', betNifti, 'Brain extraction (BET)');
+
+  postProgress(1.0, 'BET complete');
+  postStepComplete('bet');
+}
+
+function stepSelectSlices(params) {
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
+  }
+
+  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
+  const startZ = Math.max(0, Math.min(rasDims[2], Math.floor(params.startZ)));
+  const endZ = Math.max(startZ, Math.min(rasDims[2], Math.floor(params.endZ)));
+
+  postProgress(0.3, 'Selecting slice range...');
+  postLog(`Selecting slices z=${startZ}-${endZ - 1} (${endZ - startZ}/${rasDims[2]} slices)`);
+
+  const extracted = extractSliceRange(rasData, rasDims, startZ, endZ, Float32Array);
+  workerState.subsectionData = extracted.data;
+  workerState.subsectionDims = extracted.dims;
+  workerState.sliceStartZ = startZ;
+  workerState.sliceEndZ = endZ;
+
+  // Clear downstream
+  workerState.denoisedData = null;
+
+  const subsectionNifti = createFloat32Nifti(
+    new Float32Array(extracted.data),
+    headerBytes,
+    extracted.dims,
+    rasSpacing
+  );
+  postStageData('subsection', subsectionNifti, `Slice subsection (z=${startZ}-${endZ - 1})`);
+
+  postProgress(1.0, 'Slice selection complete');
+  postStepComplete('slices');
+}
+
+function stepDenoise() {
+  if (!workerState.subsectionData) {
+    throw new Error('No slice range selected. Run Select Slices first.');
+  }
+  if (!self._wasmReady) {
+    throw new Error('Preprocessing WASM not available');
+  }
+
+  const { subsectionData, subsectionDims, rasSpacing, headerBytes } = workerState;
+
+  postProgress(0.1, 'Denoising (NLM)...');
+  postLog('Running non-local means denoising on subsection...');
+
+  const denoised = wasm_bindgen.nlm_denoise(
+    subsectionData, subsectionDims[0], subsectionDims[1], subsectionDims[2],
+    5, 1, 0.0
+  );
+  workerState.denoisedData = denoised;
+  postLog('Denoising complete');
+
+  const nlmNifti = createFloat32Nifti(
+    new Float32Array(denoised),
+    headerBytes,
+    subsectionDims,
+    rasSpacing
+  );
+  postStageData('nlm', nlmNifti, 'Denoising (NLM)');
+
+  postProgress(1.0, 'Denoising complete');
+  postStepComplete('denoise');
+}
+
+async function stepInference(params) {
+  if (!workerState.subsectionData) {
+    throw new Error('No slice range selected. Run Select Slices first.');
+  }
+
+  const {
+    overlap = 0.5,
+    threshold = 0.1,
+    minComponentSize = 10,
+    modelName = 'vesselboost.onnx',
+    patchSize = [64, 64, 64],
+    modelBaseUrl
+  } = params;
+
+  const [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2] = patchSize;
+  const CROP_MARGIN = 20;
+
+  // Use denoised data if available, otherwise subsection data
+  let currentData = workerState.denoisedData
+    ? new Float32Array(workerState.denoisedData)
+    : new Float32Array(workerState.subsectionData);
+  let currentDims = [...workerState.subsectionDims];
+  let currentSpacing = [...workerState.rasSpacing];
   const rasProcessingDims = [...currentDims];
 
-  const subsectionDescription = sliceSubsection.applied
-    ? `Slice subsection for inference (z=${sliceSubsection.startZ}-${sliceSubsection.endZ - 1})`
-    : 'Slice subsection for inference (full slice range)';
-  const subsectionNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
-  postStageData('subsection', subsectionNifti, subsectionDescription);
-
-  // 6. Denoising (NLM) on subsection before 0.3mm resampling
-  if (denoising) {
-    if (self._wasmReady) {
-      postProgress(0.11, 'Denoising (NLM)...');
-      postLog('Running non-local means denoising on subsection...');
-      try {
-        const denoised = wasm_bindgen.nlm_denoise(
-          currentData, currentDims[0], currentDims[1], currentDims[2],
-          5, 1, 0.0
-        );
-        currentData = denoised;
-        postLog('Denoising complete');
-
-        const nlmNifti = createFloat32Nifti(new Float32Array(currentData), headerBytes, currentDims, currentSpacing);
-        postStageData('nlm', nlmNifti, 'Denoising (NLM)');
-      } catch (e) {
-        postLog(`Warning: Denoising failed: ${e.message}`);
-      }
-    } else {
-      postLog('Preprocessing WASM not available - skipping denoising');
-    }
-  }
-
-  // 7. Resample selected subsection to fixed 0.3mm spacing
-  postProgress(0.15, 'Resampling...');
+  // Resample to fixed 0.3mm spacing
+  postProgress(0.05, 'Resampling...');
   const targetSpacing = FIXED_TARGET_SPACING;
   const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
 
@@ -1048,14 +1118,9 @@ async function runInference(config) {
     const projectedDims = computeResampledDims(currentDims, currentSpacing, targetSpacing);
     const projectedVoxels = projectedDims[0] * projectedDims[1] * projectedDims[2];
     if (projectedVoxels > MAX_PROCESSING_VOXELS) {
-      const suggestedFraction = Math.max(
-        0.01,
-        subsectionFraction * (MAX_PROCESSING_VOXELS / projectedVoxels)
-      );
-      const suggestedPercent = Math.max(1, Math.min(100, Math.floor(suggestedFraction * 100)));
       throw new Error(
         `Selected subsection is too large at 0.3mm (${projectedDims.join('x')}, ${(projectedVoxels / 1e6).toFixed(0)}M voxels). `
-        + `Reduce Slice Subsection (%) to about ${suggestedPercent}% or less.`
+        + 'Reduce the slice range and try again.'
       );
     }
 
@@ -1068,30 +1133,20 @@ async function runInference(config) {
       postLog(`Resampled: ${currentDims.join('x')}`);
     } catch (e) {
       if (e?.message && /Array buffer allocation failed|Invalid typed array length/i.test(e.message)) {
-        throw new Error('Resampling ran out of memory. Reduce Slice Subsection (%) and try again.');
+        throw new Error('Resampling ran out of memory. Reduce the slice range and try again.');
       }
       throw e;
     }
   }
   const processingDims = [...currentDims];
 
-  // 8. Processing-size sanity check
-  const totalVoxelsPreproc = currentDims[0] * currentDims[1] * currentDims[2];
-  const volumeSizeMB = Math.round(totalVoxelsPreproc * 4 / (1024 * 1024));
-  if (totalVoxelsPreproc > MAX_PROCESSING_VOXELS) {
-    postLog(
-      `Warning: Processing volume is very large (${(totalVoxelsPreproc / 1e6).toFixed(0)}M voxels, ~${volumeSizeMB}MB). `
-      + 'Preprocessing may fail or run slowly. Consider reducing slice subsection percentage.'
-    );
-  }
-
-  // 9. Normalize
-  postProgress(0.18, 'Normalizing...');
+  // Normalize
+  postProgress(0.10, 'Normalizing...');
   postLog('Z-score normalizing (nonzero voxels)...');
   currentData = zScoreNormalizeNonzero(currentData);
 
-  // 10. Crop foreground
-  postProgress(0.20, 'Cropping foreground...');
+  // Crop foreground
+  postProgress(0.12, 'Cropping foreground...');
   const cropped = cropForeground(currentData, currentDims, CROP_MARGIN);
   if (cropped.dims[0] === 0) {
     throw new Error('No foreground voxels found in volume');
@@ -1101,21 +1156,20 @@ async function runInference(config) {
   const cropOrigin = cropped.origin;
   postLog(`Cropped: ${currentDims.join('x')} (origin: ${cropOrigin.join(',')})`);
 
-  // 11. Download and load model
+  // Download and load model
   const modelUrl = `${modelBaseUrl}/${modelName}`;
-  const modelData = await fetchModel(modelUrl, modelName, 0.20, 0.15);
+  const modelData = await fetchModel(modelUrl, modelName, 0.12, 0.15);
 
-  postProgress(0.35, 'Loading ONNX model...');
-  // WebGPU does not support 3D pooling/conv kernels - force WASM backend
+  postProgress(0.27, 'Loading ONNX model...');
   const executionProviders = ['wasm'];
-  postLog(`Creating ONNX InferenceSession (wasm - 3D ops require WASM backend)...`);
+  postLog('Creating ONNX InferenceSession (wasm - 3D ops require WASM backend)...');
   const session = await ort.InferenceSession.create(modelData, {
     executionProviders,
     graphOptimizationLevel: 'all'
   });
   postLog(`Session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 12. 3D Sliding Window Inference
+  // 3D Sliding Window Inference
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_DIM0, PATCH_DIM1, PATCH_DIM2, 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2], overlap);
   const totalPatches = positions.length;
@@ -1133,55 +1187,47 @@ async function runInference(config) {
 
   for (let pi = 0; pi < totalPatches; pi++) {
     const pos = positions[pi];
-
-    // Extract 3D patch
     const patch = extractPatch3D(currentData, currentDims, pos, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
 
-    // Preserve the upstream VesselBoost array order when packing the model tensor.
     const inputTensor = new ort.Tensor('float32', patch, [1, 1, PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
     const results = await session.run({ [inputName]: inputTensor });
-    const output = results[outputName].data; // [1, 1, D, H, W]
+    const output = results[outputName].data;
     inputTensor.dispose();
 
-    // Model outputs raw logits (no sigmoid in architecture) — always apply sigmoid.
     if (pi === 0) postLog(`First patch output range: [${output[0].toFixed(3)}, ${output[patchVoxels-1].toFixed(3)}]`);
     const probabilities = new Float32Array(patchVoxels);
     for (let i = 0; i < patchVoxels; i++) {
       probabilities[i] = 1.0 / (1.0 + Math.exp(-output[i]));
     }
 
-    // Accumulate with Gaussian weights
     accumulatePatch3D(probAccum, weightAccum, currentDims, pos, probabilities, gaussianWeights, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
 
-    // Progress reporting
     if (pi % 5 === 0 || pi === totalPatches - 1) {
       const elapsed = (performance.now() - inferenceStartTime) / 1000;
       const eta = (elapsed / (pi + 1)) * (totalPatches - pi - 1);
-      postProgress(0.38 + 0.45 * ((pi + 1) / totalPatches), `Patch ${pi+1}/${totalPatches} (ETA: ${eta.toFixed(0)}s)`);
+      postProgress(0.30 + 0.50 * ((pi + 1) / totalPatches), `Patch ${pi+1}/${totalPatches} (ETA: ${eta.toFixed(0)}s)`);
     }
   }
 
   const totalTime = ((performance.now() - inferenceStartTime) / 1000).toFixed(1);
   postLog(`Inference complete: ${totalPatches} patches in ${totalTime}s`);
-
-  // Release session
   await session.release();
 
-  // 13. Threshold and binarize
-  postProgress(0.84, 'Thresholding...');
-  postLog(`Thresholding at p=${probabilityThreshold}...`);
+  // Threshold and binarize
+  postProgress(0.82, 'Thresholding...');
+  postLog(`Thresholding at p=${threshold}...`);
   const binaryMask = new Uint8Array(totalVoxels);
   for (let i = 0; i < totalVoxels; i++) {
     if (weightAccum[i] > 0) {
       const prob = probAccum[i] / weightAccum[i];
-      if (prob >= probabilityThreshold) {
+      if (prob >= threshold) {
         binaryMask[i] = 1;
       }
     }
   }
 
-  // 14. Remove small connected components
-  postProgress(0.87, 'Removing small components...');
+  // Remove small connected components
+  postProgress(0.86, 'Removing small components...');
   postLog(`Removing components smaller than ${minComponentSize} voxels...`);
   const cleanedMask = removeSmallComponents(binaryMask, currentDims, minComponentSize);
 
@@ -1191,21 +1237,28 @@ async function runInference(config) {
   }
   postLog(`Segmented voxels: ${totalSegmented}`);
 
-  // 15. Inverse transform: uncrop
-  postProgress(0.92, 'Inverse transform...');
+  // Inverse transform: uncrop
+  postProgress(0.90, 'Inverse transform...');
   postLog('Applying inverse transforms...');
   let outputLabels = uncrop(cleanedMask, currentDims, processingDims, cropOrigin);
 
-  // Inverse resample (nearest neighbor) back to native RAS subsection dims
+  // Inverse resample back to native RAS subsection dims
   if (needsResample) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
   }
 
-  // Apply the brain mask only to the final segmentation output.
-  if (brainMask) {
+  // Apply brain mask (extract subset for slice range)
+  if (workerState.brainMask) {
+    const maskSubset = extractSliceRange(
+      workerState.brainMask,
+      workerState.rasDims,
+      workerState.sliceStartZ,
+      workerState.sliceEndZ,
+      Uint8Array
+    );
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
-      if (outputLabels[i] && !brainMask[i]) {
+      if (outputLabels[i] && !maskSubset.data[i]) {
         outputLabels[i] = 0;
         maskedOut++;
       }
@@ -1215,18 +1268,19 @@ async function runInference(config) {
     }
   }
 
-  // Reinsert subsection into full RAS grid before inverse orientation
-  if (sliceSubsection.applied) {
-    outputLabels = embedSliceSubsection(outputLabels, rasProcessingDims, rasDims, sliceSubsection.startZ);
+  // Embed subsection back into full RAS grid
+  const sliceApplied = workerState.sliceStartZ !== 0 || workerState.sliceEndZ !== workerState.rasDims[2];
+  if (sliceApplied) {
+    outputLabels = embedSliceSubsection(outputLabels, rasProcessingDims, workerState.rasDims, workerState.sliceStartZ);
   }
 
   // Inverse orient
-  if (!isIdentity) {
-    outputLabels = inverseOrient(outputLabels, rasDims, perm, flip, origDims);
+  if (!workerState.isIdentity) {
+    outputLabels = inverseOrient(outputLabels, workerState.rasDims, workerState.perm, workerState.flip, workerState.origDims);
   }
 
-  // 16. Create output NIfTI
-  const outputNifti = createOutputNifti(outputLabels, headerBytes, origDims);
+  // Create output NIfTI
+  const outputNifti = createOutputNifti(outputLabels, workerState.headerBytes, workerState.origDims);
   postStageData('segmentation', outputNifti, 'Vessel segmentation');
 
   let finalVoxels = 0;
@@ -1236,6 +1290,7 @@ async function runInference(config) {
   postLog(`Output: ${finalVoxels} vessel voxels`);
 
   postProgress(1.0, 'Complete');
+  postStepComplete('inference');
   postComplete();
 }
 
@@ -1251,13 +1306,11 @@ self.onmessage = async (e) => {
         ort.env.wasm.numThreads = getOptimalWasmThreads();
         ort.env.wasm.wasmPaths = '../wasm/';
 
-        // WebGPU not supported for 3D ops - always use WASM
         postLog(`Using WASM backend (${ort.env.wasm.numThreads} threads)`);
 
-        // Initialize preprocessing WASM
         self._wasmReady = await initWasmPreprocessing();
         if (self._wasmReady) {
-          postLog('Preprocessing WASM ready (N4ITK + NLM)');
+          postLog('Preprocessing WASM ready (N4ITK + NLM + BET)');
         }
 
         localforage.config({
@@ -1271,9 +1324,94 @@ self.onmessage = async (e) => {
       }
       break;
 
+    case 'load':
+      try {
+        stepLoad(data.inputData);
+      } catch (error) {
+        console.error('Load error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-n4':
+      try {
+        stepN4();
+      } catch (error) {
+        console.error('N4 error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-bet':
+      try {
+        stepBET(data || {});
+      } catch (error) {
+        console.error('BET error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'select-slices':
+      try {
+        stepSelectSlices(data || {});
+      } catch (error) {
+        console.error('Slice selection error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-denoise':
+      try {
+        stepDenoise();
+      } catch (error) {
+        console.error('Denoise error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'run-inference':
+      try {
+        await stepInference(data || {});
+      } catch (error) {
+        console.error('Inference error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'reset-state':
+      resetState();
+      postLog('Worker state reset');
+      break;
+
+    // Legacy support for old 'run' message
     case 'run':
       try {
-        await runInference(data);
+        // Decompose the old single-run into steps for backwards compat
+        const { inputData, settings } = data;
+        stepLoad(inputData);
+        if (settings.biasCorrection && self._wasmReady) {
+          try { stepN4(); } catch (e) { postLog(`Warning: N4 failed: ${e.message}`); }
+        }
+        if (self._wasmReady) {
+          try { stepBET({ fractionalIntensity: settings.fractionalIntensity }); } catch (e) { postLog(`Warning: BET failed: ${e.message}`); }
+        }
+        const fraction = Math.max(0.01, Math.min(1, settings.sliceSubsectionFraction || 0.1));
+        const totalZ = workerState.rasDims[2];
+        const subsetNz = Math.max(1, Math.min(totalZ, Math.round(totalZ * fraction)));
+        const startZ = Math.max(0, Math.floor((totalZ - subsetNz) / 2));
+        const endZ = startZ + subsetNz;
+        stepSelectSlices({ startZ, endZ });
+        if (settings.denoising && self._wasmReady) {
+          try { stepDenoise(); } catch (e) { postLog(`Warning: Denoising failed: ${e.message}`); }
+        }
+        await stepInference({
+          overlap: settings.overlap,
+          threshold: settings.probabilityThreshold,
+          minComponentSize: settings.minComponentSize,
+          modelName: settings.modelName,
+          patchSize: settings.patchSize,
+          modelBaseUrl: settings.modelBaseUrl
+        });
       } catch (error) {
         console.error('Inference error:', error);
         postError(error?.message || String(error));

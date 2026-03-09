@@ -247,6 +247,27 @@ input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
 .citation-primary .citation-item { margin-bottom: 0; }
 .citation-primary strong { font-size: 1.1rem; color: var(--color-primary); }
 
+/* Pipeline step sections */
+.step-section.step-disabled .section-content { pointer-events: none; opacity: 0.4; }
+.step-section.step-disabled .section-title { opacity: 0.5; }
+
+.step-description { font-size: 0.75rem; color: var(--color-text-dim); margin-bottom: var(--space-sm); line-height: 1.4; }
+
+.step-buttons { display: flex; gap: var(--space-sm); margin-top: var(--space-sm); }
+.step-buttons .btn { flex: 1; }
+
+.step-badge { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 8px; margin-left: auto; line-height: 1.5; }
+.step-badge:empty { display: none; }
+.step-badge.badge-pending { background: var(--color-border); color: var(--color-text-dim); }
+.step-badge.badge-running { background: var(--color-primary-glow); color: var(--color-primary); }
+.step-badge.badge-complete { background: var(--color-success-bg); color: var(--color-success); }
+.step-badge.badge-skipped { background: var(--color-warning-bg); color: var(--color-warning); }
+
+.slice-range-controls { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
+.slice-range-input { width: 70px !important; text-align: center; }
+.slice-range-sep { font-size: 0.75rem; color: var(--color-text-muted); }
+.slice-range-info { font-size: 0.7rem; color: var(--color-text-dim); white-space: nowrap; }
+
 .hidden { display: none !important; }
 
 @media (max-width: 1024px) {

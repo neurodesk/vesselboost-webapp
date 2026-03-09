@@ -2,6 +2,7 @@
  * InferenceExecutor
  *
  * Handles Web Worker lifecycle for ONNX model inference.
+ * Supports both step-by-step interactive pipeline and legacy single-run mode.
  */
 
 import { VERSION } from '../app/config.js';
@@ -14,6 +15,8 @@ export class InferenceExecutor {
     this.onComplete = options.onComplete || (() => {});
     this.onError = options.onError || (() => {});
     this.onInitialized = options.onInitialized || (() => {});
+    this.onStepComplete = options.onStepComplete || (() => {});
+    this.onVolumeInfo = options.onVolumeInfo || (() => {});
 
     this.worker = null;
     this.workerReady = false;
@@ -22,6 +25,17 @@ export class InferenceExecutor {
     this.webgpuAvailable = false;
     this.results = {};
     this.stageOrder = [];
+
+    // Step status tracking
+    this.stepStatus = {
+      load: 'pending',
+      n4: 'pending',
+      bet: 'pending',
+      slices: 'pending',
+      denoise: 'pending',
+      inference: 'pending'
+    };
+    this.volumeInfo = null;
   }
 
   isReady() { return this.workerReady; }
@@ -31,6 +45,9 @@ export class InferenceExecutor {
   getResult(stage) { return this.results[stage] || null; }
   getResults() { return this.results; }
   getStageOrder() { return this.stageOrder; }
+
+  getStepStatus(step) { return this.stepStatus[step]; }
+  getVolumeInfo() { return this.volumeInfo; }
 
   _setupWorker() {
     if (this.worker) return;
@@ -63,6 +80,12 @@ export class InferenceExecutor {
         case 'stageData':
           this._handleStageData(data);
           break;
+        case 'step-complete':
+          this._handleStepComplete(data.step);
+          break;
+        case 'volume-info':
+          this._handleVolumeInfo(data);
+          break;
       }
     };
 
@@ -87,8 +110,6 @@ export class InferenceExecutor {
   }
 
   _handleStageData(data) {
-    if (!this.running) return;
-
     if (!this.stageOrder.includes(data.stage)) {
       this.stageOrder.push(data.stage);
     }
@@ -104,6 +125,21 @@ export class InferenceExecutor {
       console.error('Error handling stage data:', err);
       this.updateOutput(`Error displaying ${data.stage}: ${err.message}`);
     });
+  }
+
+  _handleStepComplete(step) {
+    this.stepStatus[step] = 'complete';
+    this.running = false;
+    this.onStepComplete(step);
+  }
+
+  _handleVolumeInfo(data) {
+    this.volumeInfo = {
+      rasDims: data.rasDims,
+      rasSpacing: data.rasSpacing,
+      totalSlices: data.totalSlices
+    };
+    this.onVolumeInfo(this.volumeInfo);
   }
 
   async initialize() {
@@ -137,6 +173,93 @@ export class InferenceExecutor {
     });
   }
 
+  // ==================== Step Methods ====================
+
+  async loadVolume(inputData) {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.load = 'running';
+    this.worker.postMessage(
+      { type: 'load', data: { inputData } },
+      [inputData]
+    );
+  }
+
+  async runN4() {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.n4 = 'running';
+    this.worker.postMessage({ type: 'run-n4' });
+  }
+
+  skipN4() {
+    this.stepStatus.n4 = 'skipped';
+    this.onStepComplete('n4');
+  }
+
+  async runBET(fractionalIntensity) {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.bet = 'running';
+    this.worker.postMessage({ type: 'run-bet', data: { fractionalIntensity } });
+  }
+
+  async selectSlices(startZ, endZ) {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.slices = 'running';
+    this.worker.postMessage({ type: 'select-slices', data: { startZ, endZ } });
+  }
+
+  async runDenoise() {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.denoise = 'running';
+    this.worker.postMessage({ type: 'run-denoise' });
+  }
+
+  skipDenoise() {
+    this.stepStatus.denoise = 'skipped';
+    this.onStepComplete('denoise');
+  }
+
+  async runInference(settings) {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.inference = 'running';
+    this.worker.postMessage({ type: 'run-inference', data: settings });
+  }
+
+  async resetWorkerState() {
+    await this.initialize();
+    this.worker.postMessage({ type: 'reset-state' });
+    this.stepStatus = {
+      load: 'pending',
+      n4: 'pending',
+      bet: 'pending',
+      slices: 'pending',
+      denoise: 'pending',
+      inference: 'pending'
+    };
+    this.volumeInfo = null;
+    this.results = {};
+    this.stageOrder = [];
+  }
+
+  // Reset downstream steps when a step is re-run
+  resetDownstream(fromStep) {
+    const steps = ['load', 'n4', 'bet', 'slices', 'denoise', 'inference'];
+    const idx = steps.indexOf(fromStep);
+    if (idx < 0) return;
+    for (let i = idx + 1; i < steps.length; i++) {
+      // BET re-run does NOT invalidate downstream (mask is independent)
+      if (fromStep === 'bet') break;
+      this.stepStatus[steps[i]] = 'pending';
+    }
+  }
+
+  // ==================== Legacy Methods ====================
+
   async run(config) {
     try {
       await this.initialize();
@@ -161,7 +284,7 @@ export class InferenceExecutor {
   cancel() {
     if (!this.running) return;
 
-    this.updateOutput('Cancelling segmentation...');
+    this.updateOutput('Cancelling...');
 
     if (this.worker) {
       this.worker.terminate();
@@ -172,7 +295,7 @@ export class InferenceExecutor {
 
     this.running = false;
     this.setProgress(0, 'Cancelled');
-    this.updateOutput('Segmentation cancelled. Worker will be reinitialized on next run.');
+    this.updateOutput('Cancelled. Worker will be reinitialized on next action.');
   }
 
   clearResults() {

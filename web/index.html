@@ -61,19 +61,88 @@
         </div>
       </section>
 
-      <!-- Inference Settings -->
-      <section class="sidebar-section">
+      <!-- Step 1: Bias Field Correction -->
+      <section class="sidebar-section step-section step-disabled" id="stepN4Section">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Inference Settings
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span>Step 1: Bias Field Correction</span>
+          <span class="step-badge" id="stepN4Badge"></span>
         </h2>
         <div class="section-content">
-          <!-- Slice Subsection -->
-          <div class="param-group">
-            <label class="param-label" for="subsectionInput">Slice Subsection (%) <span class="info-icon">i<span class="info-tooltip">Percentage of center axial slices to process. Lower values run faster and reduce memory usage.</span></span></label>
-            <input type="number" id="subsectionInput" value="10" min="1" max="100" step="1">
+          <p class="step-description">N4ITK bias field correction. Recommended for raw MRI data.</p>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runN4Btn" disabled>Run N4</button>
+            <button class="btn btn-secondary btn-sm" id="skipN4Btn" disabled>Skip</button>
           </div>
-          <!-- Overlap -->
+        </div>
+      </section>
+
+      <!-- Step 2: Brain Extraction -->
+      <section class="sidebar-section step-section step-disabled" id="stepBETSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/></svg>
+          <span>Step 2: Brain Extraction</span>
+          <span class="step-badge" id="stepBETBadge"></span>
+        </h2>
+        <div class="section-content">
+          <p class="step-description">Brain mask applied to final segmentation output. Can re-run with different threshold.</p>
+          <div class="param-group">
+            <label class="param-label" for="betFiInput">Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0-1.0). Smaller values give larger brain outlines. Default: 0.5.</span></span></label>
+            <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
+          </div>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>Run BET</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 3: Slice Range -->
+      <section class="sidebar-section step-section step-disabled" id="stepSlicesSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>
+          <span>Step 3: Slice Range</span>
+          <span class="step-badge" id="stepSlicesBadge"></span>
+        </h2>
+        <div class="section-content">
+          <div class="param-group">
+            <label class="param-label">Axial Slice Range</label>
+            <div class="slice-range-controls">
+              <input type="number" id="sliceStartInput" class="slice-range-input" value="0" min="0" step="1">
+              <span class="slice-range-sep">to</span>
+              <input type="number" id="sliceEndInput" class="slice-range-input" value="0" min="0" step="1">
+              <span class="slice-range-info" id="sliceTotalDisplay">of 0 slices</span>
+            </div>
+          </div>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="previewSlicesBtn" disabled>Preview Selection</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 4: Denoising -->
+      <section class="sidebar-section step-section step-disabled" id="stepDenoiseSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446A9 9 0 1 1 12 3z"/></svg>
+          <span>Step 4: Denoising</span>
+          <span class="step-badge" id="stepDenoiseBadge"></span>
+        </h2>
+        <div class="section-content">
+          <p class="step-description">Non-local means denoising on selected slice subset.</p>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runDenoiseBtn" disabled>Run Denoising</button>
+            <button class="btn btn-secondary btn-sm" id="skipDenoiseBtn" disabled>Skip</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 5: Vessel Segmentation -->
+      <section class="sidebar-section step-section step-disabled" id="stepInferenceSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span>Step 5: Vessel Segmentation</span>
+          <span class="step-badge" id="stepInferenceBadge"></span>
+        </h2>
+        <div class="section-content">
           <div class="param-group">
             <label class="param-label" for="overlapSelect">Sliding Window Overlap <span class="info-icon">i<span class="info-tooltip">Higher overlap improves segmentation quality but takes longer. 50% is fast, 90% produces the highest quality.</span></span></label>
             <select id="overlapSelect">
@@ -82,56 +151,20 @@
               <option value="0.9">90% (High Quality)</option>
             </select>
           </div>
-          <!-- Probability Threshold -->
           <div class="param-group">
             <label class="param-label" for="thresholdInput">Probability Threshold <span class="info-icon">i<span class="info-tooltip">Minimum probability to classify a voxel as vessel. Lower values detect more vessels but may include false positives.</span></span></label>
             <input type="number" id="thresholdInput" value="0.1" min="0.01" max="0.5" step="0.01">
           </div>
-          <!-- Min Component Size -->
           <div class="param-group">
             <label class="param-label" for="minSizeInput">Min Component Size <span class="info-icon">i<span class="info-tooltip">Connected components with fewer voxels than this are removed as noise.</span></span></label>
             <input type="number" id="minSizeInput" value="10" min="1" max="1000" step="1">
           </div>
-        </div>
-      </section>
-
-      <!-- Preprocessing Settings -->
-      <section class="sidebar-section">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          Preprocessing
-        </h2>
-        <div class="section-content">
-          <div class="param-group">
-            <label class="viewer-checkbox">
-              <input type="checkbox" id="biasCorrToggle" checked>
-              <span>Bias Field Correction (N4ITK) <span class="info-icon">i<span class="info-tooltip">Corrects intensity inhomogeneity in MRI images using N4ITK algorithm. Recommended for raw MRI data.</span></span></span>
-            </label>
+          <div class="step-buttons">
+            <button class="btn btn-primary" id="runSegmentation" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Segmentation
+            </button>
           </div>
-          <div class="param-group">
-            <label class="viewer-checkbox">
-              <input type="checkbox" id="denoiseToggle">
-              <span>Denoising (NLM) <span class="info-icon">i<span class="info-tooltip">Non-local means denoising to reduce noise while preserving vessel structures.</span></span></span>
-            </label>
-          </div>
-          <div class="param-group">
-            <label class="param-label" for="betFiInput">Brain Extraction (BET) Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0–1.0). Smaller values give larger brain outlines. The brain mask is applied to the final vessel segmentation. Default: 0.5.</span></span></label>
-            <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
-          </div>
-        </div>
-      </section>
-
-      <!-- Run Section -->
-      <section class="sidebar-section">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Run
-        </h2>
-        <div class="section-content">
-          <button class="btn btn-primary" id="runSegmentation" disabled>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Run Segmentation
-          </button>
         </div>
       </section>
 

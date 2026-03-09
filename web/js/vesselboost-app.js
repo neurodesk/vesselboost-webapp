@@ -2,6 +2,7 @@
  * VesselBoost - Browser-based blood vessel segmentation
  *
  * Main application class. Orchestrates controllers, viewer, and inference.
+ * Pipeline is split into interactive steps that the user runs sequentially.
  */
 
 import { FileIOController } from './controllers/FileIOController.js';
@@ -64,7 +65,9 @@ class VesselBoostApp {
       onStageData: (data) => this.handleStageData(data),
       onComplete: () => this.onInferenceComplete(),
       onError: (msg) => this.onInferenceError(msg),
-      onInitialized: () => this.onWorkerInitialized()
+      onInitialized: () => this.onWorkerInitialized(),
+      onStepComplete: (step) => this.onStepComplete(step),
+      onVolumeInfo: (info) => this.onVolumeInfo(info)
     });
 
     // Modals
@@ -134,6 +137,25 @@ class VesselBoostApp {
     }
 
     this.setupDropZone();
+
+    // Step buttons
+    const runN4 = document.getElementById('runN4Btn');
+    if (runN4) runN4.addEventListener('click', () => this.runN4());
+
+    const skipN4 = document.getElementById('skipN4Btn');
+    if (skipN4) skipN4.addEventListener('click', () => this.skipN4());
+
+    const runBET = document.getElementById('runBETBtn');
+    if (runBET) runBET.addEventListener('click', () => this.runBET());
+
+    const previewSlices = document.getElementById('previewSlicesBtn');
+    if (previewSlices) previewSlices.addEventListener('click', () => this.previewSlices());
+
+    const runDenoise = document.getElementById('runDenoiseBtn');
+    if (runDenoise) runDenoise.addEventListener('click', () => this.runDenoise());
+
+    const skipDenoise = document.getElementById('skipDenoiseBtn');
+    if (skipDenoise) skipDenoise.addEventListener('click', () => this.skipDenoise());
 
     const runBtn = document.getElementById('runSegmentation');
     if (runBtn) runBtn.addEventListener('click', () => this.runSegmentation());
@@ -462,82 +484,306 @@ class VesselBoostApp {
     await this.viewerController.loadBaseVolume(file);
     this.syncWindowControls();
 
-    const runBtn = document.getElementById('runSegmentation');
-    if (runBtn) runBtn.disabled = false;
-
     this.currentResultTab = 'input';
     const overlayControl = document.getElementById('overlayControl');
     if (overlayControl) overlayControl.classList.add('hidden');
+
+    // Reset all pipeline steps
+    await this.resetAllSteps();
+
+    // Send data to worker for loading
+    const inputData = await file.arrayBuffer();
+    this.setStepRunning('load');
+    await this.inferenceExecutor.loadVolume(inputData);
   }
 
-  // ==================== Inference ====================
+  // ==================== Pipeline Step Methods ====================
 
-  async runSegmentation() {
-    if (!this.fileIOController.hasValidData()) {
-      this.updateOutput('No input volume loaded');
+  async runN4() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.setStepRunning('n4');
+    this.inferenceExecutor.resetDownstream('n4');
+    this.resetUIDownstream('n4');
+    await this.inferenceExecutor.runN4();
+  }
+
+  skipN4() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.inferenceExecutor.skipN4();
+  }
+
+  async runBET() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const betFiInput = document.getElementById('betFiInput');
+    const fi = betFiInput ? parseFloat(betFiInput.value) : 0.5;
+    this.setStepRunning('bet');
+    await this.inferenceExecutor.runBET(fi);
+  }
+
+  async previewSlices() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const startInput = document.getElementById('sliceStartInput');
+    const endInput = document.getElementById('sliceEndInput');
+    const startZ = startInput ? parseInt(startInput.value, 10) : 0;
+    const endZ = endInput ? parseInt(endInput.value, 10) : 0;
+    if (endZ <= startZ) {
+      this.updateOutput('Invalid slice range: end must be greater than start');
       return;
     }
+    this.setStepRunning('slices');
+    this.inferenceExecutor.resetDownstream('slices');
+    this.resetUIDownstream('slices');
+    await this.inferenceExecutor.selectSlices(startZ, endZ);
+  }
 
-    const file = this.fileIOController.getActiveFile();
+  async runDenoise() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.setStepRunning('denoise');
+    this.inferenceExecutor.resetDownstream('denoise');
+    this.resetUIDownstream('denoise');
+    await this.inferenceExecutor.runDenoise();
+  }
 
-    // Get settings from UI
+  skipDenoise() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.inferenceExecutor.skipDenoise();
+  }
+
+  async runSegmentation() {
+    if (this.inferenceExecutor.isRunning()) return;
+
     const overlapSelect = document.getElementById('overlapSelect');
     const overlap = overlapSelect ? parseFloat(overlapSelect.value) : Config.INFERENCE_DEFAULTS.overlap;
 
     const thresholdInput = document.getElementById('thresholdInput');
-    const probabilityThreshold = thresholdInput ? parseFloat(thresholdInput.value) : Config.INFERENCE_DEFAULTS.probabilityThreshold;
+    const threshold = thresholdInput ? parseFloat(thresholdInput.value) : Config.INFERENCE_DEFAULTS.probabilityThreshold;
 
     const minSizeInput = document.getElementById('minSizeInput');
     const minComponentSize = minSizeInput ? parseInt(minSizeInput.value, 10) : Config.INFERENCE_DEFAULTS.minComponentSize;
 
-    const subsectionInput = document.getElementById('subsectionInput');
-    const subsectionPercent = subsectionInput ? parseFloat(subsectionInput.value) : (Config.INFERENCE_DEFAULTS.sliceSubsectionFraction * 100);
-    const sliceSubsectionFraction = Math.max(0.01, Math.min(1, (Number.isFinite(subsectionPercent) ? subsectionPercent : 30) / 100));
-
-    const biasCorrToggle = document.getElementById('biasCorrToggle');
-    const biasCorrection = biasCorrToggle ? biasCorrToggle.checked : Config.INFERENCE_DEFAULTS.biasCorrection;
-
-    const denoiseToggle = document.getElementById('denoiseToggle');
-    const denoising = denoiseToggle ? denoiseToggle.checked : Config.INFERENCE_DEFAULTS.denoising;
-
-    const betFiInput = document.getElementById('betFiInput');
-    const fractionalIntensity = betFiInput ? parseFloat(betFiInput.value) : Config.INFERENCE_DEFAULTS.fractionalIntensity;
-
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
-    const inputData = await file.arrayBuffer();
 
-    const runBtn = document.getElementById('runSegmentation');
     const cancelBtn = document.getElementById('cancelButton');
-    if (runBtn) runBtn.disabled = true;
     if (cancelBtn) cancelBtn.disabled = false;
 
-    // Clear previous
+    // Clear previous results
     this.inferenceExecutor.clearResults();
     this.disableAllResultTabs();
 
-    await this.inferenceExecutor.run({
-      inputData,
-      settings: {
-        modelName: Config.MODEL.name,
-        patchSize: Config.MODEL.patchSize,
-        overlap,
-        probabilityThreshold,
-        minComponentSize,
-        sliceSubsectionFraction,
-        biasCorrection,
-        denoising,
-        fractionalIntensity,
-        modelBaseUrl
-      }
+    this.setStepRunning('inference');
+    await this.inferenceExecutor.runInference({
+      overlap,
+      threshold,
+      minComponentSize,
+      modelName: Config.MODEL.name,
+      patchSize: Config.MODEL.patchSize,
+      modelBaseUrl
     });
   }
 
   cancelSegmentation() {
     this.inferenceExecutor.cancel();
-    const runBtn = document.getElementById('runSegmentation');
     const cancelBtn = document.getElementById('cancelButton');
-    if (runBtn) runBtn.disabled = false;
     if (cancelBtn) cancelBtn.disabled = true;
+
+    // Reset running step badges back to pending
+    for (const step of Config.PIPELINE_STEPS) {
+      if (this.inferenceExecutor.getStepStatus(step) === 'running') {
+        this.updateStepBadge(step, 'pending');
+      }
+    }
+  }
+
+  // ==================== Step UI Management ====================
+
+  setStepRunning(step) {
+    this.updateStepBadge(step, 'running');
+    this.setStepButtonsEnabled(step, false);
+  }
+
+  async resetAllSteps() {
+    // Reset worker state
+    if (this.inferenceExecutor.isReady()) {
+      await this.inferenceExecutor.resetWorkerState();
+    }
+
+    // Reset all UI step sections
+    for (const step of Config.PIPELINE_STEPS) {
+      this.updateStepBadge(step, '');
+      this.setStepEnabled(step, false);
+      this.setStepButtonsEnabled(step, false);
+    }
+
+    // Reset results
+    this.inferenceExecutor.clearResults();
+    this.disableAllResultTabs();
+
+    const resultsSection = document.getElementById('resultsSection');
+    if (resultsSection) {
+      resultsSection.classList.add('hidden');
+      resultsSection.classList.add('collapsed');
+    }
+
+    const overlayControl = document.getElementById('overlayControl');
+    if (overlayControl) overlayControl.classList.add('hidden');
+  }
+
+  onStepComplete(step) {
+    const status = this.inferenceExecutor.getStepStatus(step);
+    this.updateStepBadge(step, status);
+    this.setStepButtonsEnabled(step, true);
+
+    const statusText = document.getElementById('statusText');
+    if (statusText) statusText.textContent = 'Ready';
+
+    // Enable next step section
+    switch (step) {
+      case 'load':
+        this.setStepEnabled('n4', true);
+        this.setStepButtonsEnabled('n4', true);
+        break;
+      case 'n4':
+        this.setStepEnabled('bet', true);
+        this.setStepButtonsEnabled('bet', true);
+        this.setStepEnabled('slices', true);
+        this.setStepButtonsEnabled('slices', true);
+        break;
+      case 'bet':
+        // BET doesn't gate anything - slices are already enabled from n4
+        // But ensure slices are enabled if they weren't already
+        this.setStepEnabled('slices', true);
+        this.setStepButtonsEnabled('slices', true);
+        break;
+      case 'slices':
+        this.setStepEnabled('denoise', true);
+        this.setStepButtonsEnabled('denoise', true);
+        break;
+      case 'denoise':
+        this.setStepEnabled('inference', true);
+        this.setStepButtonsEnabled('inference', true);
+        break;
+      case 'inference':
+        // Handled by onInferenceComplete
+        break;
+    }
+
+    // Load stage data into viewer for preprocessing steps
+    // (stageData is already handled in handleStageData)
+  }
+
+  onVolumeInfo(info) {
+    // Populate slice range inputs with defaults (center 10%)
+    const totalSlices = info.totalSlices;
+    const subsetNz = Math.max(1, Math.round(totalSlices * 0.1));
+    const startZ = Math.max(0, Math.floor((totalSlices - subsetNz) / 2));
+    const endZ = startZ + subsetNz;
+
+    const startInput = document.getElementById('sliceStartInput');
+    const endInput = document.getElementById('sliceEndInput');
+    const totalDisplay = document.getElementById('sliceTotalDisplay');
+
+    if (startInput) {
+      startInput.value = startZ;
+      startInput.max = totalSlices;
+    }
+    if (endInput) {
+      endInput.value = endZ;
+      endInput.max = totalSlices;
+    }
+    if (totalDisplay) {
+      totalDisplay.textContent = `of ${totalSlices} slices`;
+    }
+  }
+
+  updateStepBadge(step, status) {
+    const badgeMap = {
+      'load': 'stepN4Badge', // load doesn't have its own badge, reusing
+      'n4': 'stepN4Badge',
+      'bet': 'stepBETBadge',
+      'slices': 'stepSlicesBadge',
+      'denoise': 'stepDenoiseBadge',
+      'inference': 'stepInferenceBadge'
+    };
+    // Load step doesn't have a visible badge
+    if (step === 'load') return;
+
+    const badge = document.getElementById(badgeMap[step]);
+    if (!badge) return;
+
+    badge.className = 'step-badge';
+    badge.textContent = '';
+
+    switch (status) {
+      case 'running':
+        badge.classList.add('badge-running');
+        badge.textContent = 'Running';
+        break;
+      case 'complete':
+        badge.classList.add('badge-complete');
+        badge.textContent = 'Done';
+        break;
+      case 'skipped':
+        badge.classList.add('badge-skipped');
+        badge.textContent = 'Skipped';
+        break;
+      case 'pending':
+        badge.classList.add('badge-pending');
+        badge.textContent = 'Pending';
+        break;
+    }
+  }
+
+  setStepEnabled(step, enabled) {
+    const sectionMap = {
+      'load': null, // no separate section for load
+      'n4': 'stepN4Section',
+      'bet': 'stepBETSection',
+      'slices': 'stepSlicesSection',
+      'denoise': 'stepDenoiseSection',
+      'inference': 'stepInferenceSection'
+    };
+    const sectionId = sectionMap[step];
+    if (!sectionId) return;
+
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+
+    if (enabled) {
+      section.classList.remove('step-disabled');
+    } else {
+      section.classList.add('step-disabled');
+    }
+  }
+
+  setStepButtonsEnabled(step, enabled) {
+    const buttonMap = {
+      'n4': ['runN4Btn', 'skipN4Btn'],
+      'bet': ['runBETBtn'],
+      'slices': ['previewSlicesBtn'],
+      'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
+      'inference': ['runSegmentation']
+    };
+    const buttons = buttonMap[step];
+    if (!buttons) return;
+
+    for (const id of buttons) {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = !enabled;
+    }
+  }
+
+  resetUIDownstream(fromStep) {
+    const steps = ['n4', 'bet', 'slices', 'denoise', 'inference'];
+    const idx = steps.indexOf(fromStep);
+    if (idx < 0) return;
+
+    for (let i = idx + 1; i < steps.length; i++) {
+      // BET re-run does NOT reset downstream
+      if (fromStep === 'bet') break;
+      this.updateStepBadge(steps[i], '');
+      this.setStepEnabled(steps[i], false);
+      this.setStepButtonsEnabled(steps[i], false);
+    }
   }
 
   // ==================== Results ====================
@@ -593,7 +839,7 @@ class VesselBoostApp {
     inputRow.appendChild(inputLabel);
     container.appendChild(inputRow);
 
-    // Preprocessing stages (bet, n4, nlm)
+    // Preprocessing stages
     for (const stage of stages) {
       if (stage === 'segmentation') continue;
 
@@ -623,7 +869,7 @@ class VesselBoostApp {
       container.appendChild(row);
     }
 
-    // Segmentation row (if available)
+    // Segmentation row
     if (stages.includes('segmentation')) {
       const segRow = document.createElement('div');
       segRow.className = 'volume-toggle';
@@ -700,10 +946,8 @@ class VesselBoostApp {
   }
 
   onInferenceComplete() {
-    const runBtn = document.getElementById('runSegmentation');
     const cancelBtn = document.getElementById('cancelButton');
     const statusText = document.getElementById('statusText');
-    if (runBtn) runBtn.disabled = false;
     if (cancelBtn) cancelBtn.disabled = true;
     if (statusText) statusText.textContent = 'Ready';
 
@@ -713,7 +957,6 @@ class VesselBoostApp {
     if (overlayFile && this.inputFile) {
       this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'red').then(() => {
         this.syncWindowControls();
-        // Mark input as active view
         const container = document.getElementById('stageButtons');
         if (container) {
           container.querySelectorAll('.view-btn').forEach(btn => {
@@ -725,12 +968,19 @@ class VesselBoostApp {
   }
 
   onInferenceError(msg) {
-    const runBtn = document.getElementById('runSegmentation');
     const cancelBtn = document.getElementById('cancelButton');
     const statusText = document.getElementById('statusText');
-    if (runBtn) runBtn.disabled = false;
     if (cancelBtn) cancelBtn.disabled = true;
     if (statusText) statusText.textContent = 'Error';
+
+    // Reset any running badges back
+    for (const step of Config.PIPELINE_STEPS) {
+      const status = this.inferenceExecutor.getStepStatus(step);
+      if (status === 'running') {
+        this.updateStepBadge(step, 'pending');
+        this.setStepButtonsEnabled(step, true);
+      }
+    }
   }
 
   disableAllResultTabs() {
