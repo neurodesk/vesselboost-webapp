@@ -47,7 +47,7 @@ pub fn n4_bias_correct_impl(
     }
 
     // Downsample for faster processing
-    let (mut shrunken_log, shrunken_dims) = if shrink_factor > 1 {
+    let (shrunken_log, shrunken_dims) = if shrink_factor > 1 {
         utils::downsample_volume(&log_image, dims, shrink_factor)
     } else {
         (log_image.clone(), dims)
@@ -88,24 +88,28 @@ pub fn n4_bias_correct_impl(
             break;
         }
 
-        // Sharpen histogram: estimate the "true" signal distribution
-        // by Wiener deconvolution (simplified: just use the residual)
+        // Estimate residual bias: smooth the corrected image to extract
+        // the low-frequency component, which approximates the remaining
+        // bias field that hasn't been captured yet.  Subtract the masked
+        // mean so the bias estimate is zero-centred (pure multiplicative
+        // inhomogeneity, no global shift).
+        let smoothed_corrected = smooth_3d(&corrected, shrunken_dims, &shrunken_mask);
+        let (smooth_mean, _) = masked_stats(&smoothed_corrected, &shrunken_mask);
+
         let residual: Vec<f32> = (0..sn)
             .map(|i| {
                 if shrunken_mask[i] {
-                    shrunken_log[i] - corrected[i] - bias_field[i]
+                    smoothed_corrected[i] - smooth_mean
                 } else {
                     0.0
                 }
             })
             .collect();
 
-        // Update bias field with smoothed residual
-        let smoothed = smooth_3d(&residual, shrunken_dims, &shrunken_mask);
-
+        // Update bias field with residual (already smooth — derived from smooth_3d)
         for i in 0..sn {
             if shrunken_mask[i] {
-                bias_field[i] += smoothed[i];
+                bias_field[i] += residual[i];
             }
         }
 
@@ -121,13 +125,6 @@ pub fn n4_bias_correct_impl(
             break;
         }
         prev_metric = metric;
-
-        // Update shrunken log image for next iteration
-        shrunken_log = corrected
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| if shrunken_mask[i] { v + bias_field[i] } else { 0.0 })
-            .collect();
     }
 
     // Upsample bias field to original resolution
