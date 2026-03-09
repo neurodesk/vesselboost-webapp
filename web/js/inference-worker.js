@@ -865,6 +865,41 @@ async function runInference(config) {
     currentData = oriented.data;
     currentDims = oriented.dims;
     currentSpacing = [voxelSize[perm[0]], voxelSize[perm[1]], voxelSize[perm[2]]];
+
+    // Rewrite headerBytes sform to match the RAS-reoriented data.
+    // Compute origin: physical position of new voxel [0,0,0].
+    const srcVoxel = [0, 0, 0];
+    for (let i = 0; i < 3; i++) {
+      srcVoxel[perm[i]] = flip[i] ? (currentDims[i] - 1) : 0;
+    }
+    const origin = [0, 0, 0];
+    for (let r = 0; r < 3; r++) {
+      origin[r] = affine[r][0] * srcVoxel[0]
+                + affine[r][1] * srcVoxel[1]
+                + affine[r][2] * srcVoxel[2]
+                + affine[r][3];
+    }
+
+    const hdrView = new DataView(headerBytes);
+    // sform_code = 1 (scanner anat)
+    hdrView.setInt16(254, 1, true);
+    // srow_x: [sx, 0, 0, ox]
+    hdrView.setFloat32(280, currentSpacing[0], true);
+    hdrView.setFloat32(284, 0, true);
+    hdrView.setFloat32(288, 0, true);
+    hdrView.setFloat32(292, origin[0], true);
+    // srow_y: [0, sy, 0, oy]
+    hdrView.setFloat32(296, 0, true);
+    hdrView.setFloat32(300, currentSpacing[1], true);
+    hdrView.setFloat32(304, 0, true);
+    hdrView.setFloat32(308, origin[1], true);
+    // srow_z: [0, 0, sz, oz]
+    hdrView.setFloat32(312, 0, true);
+    hdrView.setFloat32(316, 0, true);
+    hdrView.setFloat32(320, currentSpacing[2], true);
+    hdrView.setFloat32(324, origin[2], true);
+    // Clear qform so viewer uses sform
+    hdrView.setInt16(252, 0, true);
   }
   postLog(`RAS dims: ${currentDims.join('x')}`);
 
