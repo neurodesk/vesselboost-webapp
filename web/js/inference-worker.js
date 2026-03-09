@@ -1108,23 +1108,11 @@ async function runInference(config) {
     const output = results[outputName].data; // [1, 1, D, H, W]
     inputTensor.dispose();
 
-    // Apply sigmoid if output contains values outside [0, 1] (logits)
-    // Sample multiple evenly-spaced values to reliably detect logits
-    let needsSigmoid = false;
-    const sampleStep = Math.max(1, Math.floor(patchVoxels / 20));
-    for (let si = 0; si < patchVoxels; si += sampleStep) {
-      if (output[si] < 0 || output[si] > 1) { needsSigmoid = true; break; }
-    }
-    let probabilities;
-    if (needsSigmoid) {
-      if (pi === 0) postLog(`Applying sigmoid (output range: [${output[0].toFixed(3)}, ${output[patchVoxels-1].toFixed(3)}])`);
-      probabilities = new Float32Array(patchVoxels);
-      for (let i = 0; i < patchVoxels; i++) {
-        probabilities[i] = 1.0 / (1.0 + Math.exp(-output[i]));
-      }
-    } else {
-      if (pi === 0) postLog(`No sigmoid needed (output already in [0,1])`);
-      probabilities = output instanceof Float32Array ? output : new Float32Array(output);
+    // Model outputs raw logits (no sigmoid in architecture) — always apply sigmoid.
+    if (pi === 0) postLog(`First patch output range: [${output[0].toFixed(3)}, ${output[patchVoxels-1].toFixed(3)}]`);
+    const probabilities = new Float32Array(patchVoxels);
+    for (let i = 0; i < patchVoxels; i++) {
+      probabilities[i] = 1.0 / (1.0 + Math.exp(-output[i]));
     }
 
     // Accumulate with Gaussian weights
