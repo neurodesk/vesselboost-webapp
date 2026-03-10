@@ -1187,12 +1187,18 @@ async function stepSynthStrip(params) {
     }
   }
 
-  // 7. Threshold SDT at 0 -> brain mask (SDT > 0 means inside brain)
+  // 7. Threshold SDT at 0 -> brain mask (SDT < 0 means inside brain)
   postProgress(0.87, `${modeLabel}: creating brain mask...`);
+  let sdtMin = Infinity, sdtMax = -Infinity;
+  for (let i = 0; i < totalVoxels; i++) {
+    if (sdtAccum[i] < sdtMin) sdtMin = sdtAccum[i];
+    if (sdtAccum[i] > sdtMax) sdtMax = sdtAccum[i];
+  }
+  postLog(`${modeLabel} SDT range: [${sdtMin.toFixed(3)}, ${sdtMax.toFixed(3)}]`);
   const paddedMask = new Uint8Array(totalVoxels);
   let maskCount = 0;
   for (let i = 0; i < totalVoxels; i++) {
-    if (sdtAccum[i] > 0) {
+    if (sdtAccum[i] < 0) {
       paddedMask[i] = 1;
       maskCount++;
     }
