@@ -1209,7 +1209,7 @@ async function stepSynthStrip(params) {
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
   const fast = !!params.fast;
   const PATCH_SIZE = 96;
-  const OVERLAP = fast ? 0 : 0.5;
+  const OVERLAP = fast ? 0.25 : 0.5;
   const TARGET_SPACING = [1.0, 1.0, 1.0];
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
 

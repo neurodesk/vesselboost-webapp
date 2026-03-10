@@ -63,7 +63,7 @@ export const SYNTHSTRIP_FAST_MODEL = {
   label: 'SynthStrip Fast',
   patchSize: [96, 96, 96],
   targetSpacing: [1.0, 1.0, 1.0],
-  overlap: 0
+  overlap: 0.25
 };
 
 export const INFERENCE_DEFAULTS = {
