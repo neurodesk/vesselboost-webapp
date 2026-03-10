@@ -1235,33 +1235,23 @@ async function stepInference(params) {
     }
   }
 
-  // Count pre-CC voxels for diagnostic comparison
-  let preCCvoxels = 0;
+  // Count vessel voxels in padded space for diagnostic comparison
+  let paddedVesselCount = 0;
   for (let i = 0; i < totalVoxels; i++) {
-    if (binaryMask[i]) preCCvoxels++;
+    if (binaryMask[i]) paddedVesselCount++;
   }
-  postLog(`Pre-CC vessel voxels (padded space): ${preCCvoxels}`);
+  postLog(`Vessel voxels (padded space): ${paddedVesselCount}`);
 
-  // Remove small connected components
-  postProgress(0.86, 'Removing small components...');
-  postLog(`Removing components smaller than ${minComponentSize} voxels...`);
-  const cleanedMask = removeSmallComponents(binaryMask, currentDims, minComponentSize);
-
-  let totalSegmented = 0;
-  for (let i = 0; i < totalVoxels; i++) {
-    if (cleanedMask[i]) totalSegmented++;
-  }
-  postLog(`Segmented voxels: ${totalSegmented}`);
-
-  // Inverse transform: resize back to pre-pad dimensions
-  postProgress(0.90, 'Inverse transform...');
+  // Inverse transform: resize back to pre-pad dimensions FIRST
+  postProgress(0.86, 'Inverse transform...');
   postLog('Applying inverse transforms...');
-  let outputLabels = cleanedMask;
+  let outputLabels = binaryMask;
   if (prePadDims[0] !== processingDims[0] || prePadDims[1] !== processingDims[1] || prePadDims[2] !== processingDims[2]) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, prePadDims);
   }
 
-  // Apply brain mask (same dimensions as rasDims, direct comparison)
+  // Apply brain mask BEFORE CC cleanup (same dimensions as rasDims)
+  // This prevents the brain mask boundary from fragmenting connected vessel trees
   if (workerState.brainMask) {
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
@@ -1274,6 +1264,18 @@ async function stepInference(params) {
       postLog(`Brain mask removed ${maskedOut} vessel voxels outside brain`);
     }
   }
+
+  // Remove small connected components AFTER brain mask
+  postProgress(0.90, 'Removing small components...');
+  postLog(`Removing components smaller than ${minComponentSize} voxels...`);
+  const rasDims = workerState.rasDims;
+  const cleanedLabels = removeSmallComponents(outputLabels, rasDims, minComponentSize);
+  let totalSegmented = 0;
+  for (let i = 0; i < cleanedLabels.length; i++) {
+    if (cleanedLabels[i]) totalSegmented++;
+  }
+  postLog(`Segmented voxels after CC: ${totalSegmented}`);
+  outputLabels = cleanedLabels;
 
   // Inverse orient
   if (!workerState.isIdentity) {
