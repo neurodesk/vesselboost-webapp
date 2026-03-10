@@ -1208,10 +1208,10 @@ async function stepSynthStrip(params) {
 
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
   const fast = !!params.fast;
-  const PATCH_SIZE = 96;
-  const OVERLAP = fast ? 0.25 : 0.5;
-  const TARGET_SPACING = [1.0, 1.0, 1.0];
+  const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
+  // UNet has 6 pooling levels so input dims must be divisible by 2^6 = 64
+  const PAD_MULTIPLE = 64;
 
   postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
   postLog(`Running ${modeLabel} brain extraction...`);
@@ -1258,10 +1258,10 @@ async function stepSynthStrip(params) {
   currentData = normalized;
   postLog(`Normalized to [0,1]: min=${vMin.toFixed(2)}, p99=${p99.toFixed(2)}`);
 
-  // 3. Zero-pad to patch multiples (preserves voxel spacing unlike resize)
+  // 3. Zero-pad to multiples of 64 (required by UNet's 6 pooling levels)
   postProgress(0.07, `${modeLabel}: padding...`);
   const prePadDims = [...currentDims];
-  const padded = zeroPadToPatchMultiple(currentData, currentDims, PATCH_SIZE);
+  const padded = zeroPadToPatchMultiple(currentData, currentDims, PAD_MULTIPLE);
   if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
     postLog(`Zero-padded: ${currentDims.join('x')} -> ${padded.dims.join('x')}`);
     currentData = padded.data;
@@ -1282,66 +1282,33 @@ async function stepSynthStrip(params) {
   });
   postLog(`${modeLabel} session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 6. Sliding window inference
-  const useGaussian = OVERLAP > 0;
-  const gaussianWeights = useGaussian ? computeGaussianWeightMap3D(PATCH_SIZE, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE / 8) : null;
-  const positions = computePatchPositions3D(currentDims, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE], OVERLAP);
-  const totalPatches = positions.length;
-  postLog(`${modeLabel} inference: ${totalPatches} patches (${PATCH_SIZE}^3), overlap=${OVERLAP}`);
-
-  const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
-  const sdtAccum = new Float32Array(totalVoxels);
-  const weightAccum = useGaussian ? new Float32Array(totalVoxels) : null;
-
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
-  const patchVoxels = PATCH_SIZE * PATCH_SIZE * PATCH_SIZE;
+  const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
 
-  for (let pi = 0; pi < totalPatches; pi++) {
-    const pos = positions[pi];
-    const patch = extractPatch3D(currentData, currentDims, pos, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+  // 6. Single-pass full-volume inference (SynthStrip requires full brain context)
+  postProgress(0.30, `${modeLabel}: running inference on ${currentDims.join('x')} volume...`);
+  postLog(`${modeLabel} single-pass inference: ${currentDims.join('x')} (${(totalVoxels/1e6).toFixed(1)}M voxels)`);
 
-    const inputTensor = new ort.Tensor('float32', patch, [1, 1, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
-    const results = await session.run({ [inputName]: inputTensor });
-    const output = results[outputName].data;
-    inputTensor.dispose();
-
-    if (useGaussian) {
-      accumulatePatch3D(sdtAccum, weightAccum, currentDims, pos, output, gaussianWeights, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
-    } else {
-      writePatch3D(sdtAccum, currentDims, pos, output, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
-    }
-
-    if ((pi + 1) % 5 === 0 || pi === totalPatches - 1) {
-      const pct = ((pi + 1) / totalPatches * 100).toFixed(0);
-      postProgress(0.30 + 0.55 * (pi + 1) / totalPatches, `${modeLabel}: patch ${pi + 1}/${totalPatches} (${pct}%)`);
-    }
-  }
-
+  const inputTensor = new ort.Tensor('float32', currentData, [1, 1, ...currentDims]);
+  const results = await session.run({ [inputName]: inputTensor });
+  const sdtData = results[outputName].data;
+  inputTensor.dispose();
   session.release();
-
-  // Average accumulated SDT (only needed when using Gaussian weighting)
-  if (useGaussian) {
-    for (let i = 0; i < totalVoxels; i++) {
-      if (weightAccum[i] > 0) {
-        sdtAccum[i] /= weightAccum[i];
-      }
-    }
-  }
 
   // 7. Threshold SDT -> brain mask (SDT < border means inside brain; FreeSurfer default border=1)
   const SDT_BORDER = 1;
   postProgress(0.87, `${modeLabel}: creating brain mask...`);
   let sdtMin = Infinity, sdtMax = -Infinity;
   for (let i = 0; i < totalVoxels; i++) {
-    if (sdtAccum[i] < sdtMin) sdtMin = sdtAccum[i];
-    if (sdtAccum[i] > sdtMax) sdtMax = sdtAccum[i];
+    if (sdtData[i] < sdtMin) sdtMin = sdtData[i];
+    if (sdtData[i] > sdtMax) sdtMax = sdtData[i];
   }
   postLog(`${modeLabel} SDT range: [${sdtMin.toFixed(3)}, ${sdtMax.toFixed(3)}]`);
   const paddedMask = new Uint8Array(totalVoxels);
   let maskCount = 0;
   for (let i = 0; i < totalVoxels; i++) {
-    if (sdtAccum[i] < SDT_BORDER) {
+    if (sdtData[i] < SDT_BORDER) {
       paddedMask[i] = 1;
       maskCount++;
     }
