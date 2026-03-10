@@ -1113,7 +1113,6 @@ async function stepInference(params) {
   } = params;
 
   const [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2] = patchSize;
-  const CROP_MARGIN = 20;
 
   // Use denoised data if available, otherwise full RAS volume data
   let currentData = workerState.denoisedData
@@ -1133,25 +1132,11 @@ async function stepInference(params) {
   }
   const processingDims = [...currentDims];
 
-  // Compute foreground bounding box on raw data (before normalization)
-  postProgress(0.10, 'Computing foreground...');
-  const bbox = computeForegroundBBox(currentData, currentDims, CROP_MARGIN);
-  if (!bbox) {
-    throw new Error('No foreground voxels found in volume');
-  }
-
   // Normalize (z-score over ALL voxels, matching Python standardiser)
-  postProgress(0.11, 'Normalizing...');
+  postProgress(0.10, 'Normalizing...');
   postLog('Z-score normalizing (all voxels)...');
   currentData = zScoreNormalize(currentData);
-
-  // Crop using pre-computed bounding box
-  postProgress(0.12, 'Cropping foreground...');
-  const cropped = cropVolume(currentData, currentDims, bbox);
-  currentData = cropped.data;
-  currentDims = cropped.dims;
-  const cropOrigin = cropped.origin;
-  postLog(`Cropped: ${currentDims.join('x')} (origin: ${cropOrigin.join(',')})`);
+  postLog(`Volume: ${currentDims.join('x')}, range: [${Math.min(...currentData.slice(0,1000)).toFixed(3)}, ...]`);
 
   // Download and load model
   const modelUrl = `${modelBaseUrl}/${modelName}`;
@@ -1234,12 +1219,10 @@ async function stepInference(params) {
   }
   postLog(`Segmented voxels: ${totalSegmented}`);
 
-  // Inverse transform: uncrop
+  // Inverse transform: resize back to pre-pad dimensions
   postProgress(0.90, 'Inverse transform...');
   postLog('Applying inverse transforms...');
-  let outputLabels = uncrop(cleanedMask, currentDims, processingDims, cropOrigin);
-
-  // Inverse resize back to pre-pad dimensions
+  let outputLabels = cleanedMask;
   if (prePadDims[0] !== processingDims[0] || prePadDims[1] !== processingDims[1] || prePadDims[2] !== processingDims[2]) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, prePadDims);
   }
