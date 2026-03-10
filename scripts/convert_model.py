@@ -109,6 +109,15 @@ class Unet(nn.Module):
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "web", "models")
+DEFAULT_WEIGHTS_DIR = os.path.join(PROJECT_ROOT, ".tmp_weights")
+
+# Model variants: (weights filename, ONNX output filename)
+MODEL_VARIANTS = [
+    ("vesselboost_weights.pth", "vesselboost.onnx"),
+    ("vesselboost_omelette1_weights.pth", "vesselboost-omelette1.onnx"),
+    ("vesselboost_omelette2_weights.pth", "vesselboost-omelette2.onnx"),
+    ("vesselboost_t2s_weights.pth", "vesselboost-t2s.onnx"),
+]
 
 
 # ==================== Conversion ====================
@@ -187,34 +196,20 @@ def verify_model(onnx_path, pytorch_model=None, patch_size=64):
     return True
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Convert VesselBoost model to ONNX")
-    parser.add_argument("--checkpoint", required=True, help="Path to PyTorch .pth checkpoint")
-    parser.add_argument("--output", default=None, help="Output ONNX path (default: web/models/vesselboost.onnx)")
-    parser.add_argument("--quantize", action="store_true", help="Apply UINT8 dynamic quantization")
-    parser.add_argument("--patch-size", type=int, default=64, help="Patch size (default: 64)")
-    parser.add_argument("--filters", type=int, default=16, help="Base filter count (default: 16)")
-    args = parser.parse_args()
-
-    if not os.path.exists(args.checkpoint):
-        print(f"Checkpoint not found: {args.checkpoint}")
-        sys.exit(1)
-
-    os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-    output_path = args.output or os.path.join(DEFAULT_OUTPUT_DIR, "vesselboost.onnx")
-
-    print(f"Checkpoint: {args.checkpoint}")
+def convert_single(checkpoint_path, output_path, quantize=False, patch_size=64, filter_num=16):
+    """Convert a single checkpoint to ONNX."""
+    print(f"Checkpoint: {checkpoint_path}")
     print(f"Output: {output_path}")
-    print(f"Quantize: {args.quantize}")
-    print(f"Architecture: VesselBoost 3D UNet, filters={args.filters}, patch_size={args.patch_size}")
+    print(f"Quantize: {quantize}")
+    print(f"Architecture: VesselBoost 3D UNet, filters={filter_num}, patch_size={patch_size}")
 
     print("\nLoading PyTorch model...")
-    model = load_model(args.checkpoint, filter_num=args.filters)
+    model = load_model(checkpoint_path, filter_num=filter_num)
 
-    if args.quantize:
+    if quantize:
         fp32_path = output_path.replace(".onnx", "-fp32.onnx")
         print("Exporting to ONNX (FP32)...")
-        export_to_onnx(model, fp32_path, patch_size=args.patch_size)
+        export_to_onnx(model, fp32_path, patch_size=patch_size)
 
         print("Quantizing to UINT8...")
         quantize_model(fp32_path, output_path)
@@ -225,10 +220,10 @@ def main():
             os.remove(data_file)
     else:
         print("Exporting to ONNX (FP32)...")
-        export_to_onnx(model, output_path, patch_size=args.patch_size)
+        export_to_onnx(model, output_path, patch_size=patch_size)
 
     print("Verifying model...")
-    ok = verify_model(output_path, model, patch_size=args.patch_size)
+    ok = verify_model(output_path, model, patch_size=patch_size)
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print(f"\nSize: {size_mb:.1f} MB")
@@ -236,7 +231,64 @@ def main():
         print("SUCCESS")
     else:
         print("FAILED")
-        sys.exit(1)
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Convert VesselBoost model to ONNX")
+    parser.add_argument("--checkpoint", help="Path to PyTorch .pth checkpoint")
+    parser.add_argument("--output", default=None, help="Output ONNX path (default: web/models/vesselboost.onnx)")
+    parser.add_argument("--quantize", action="store_true", help="Apply UINT8 dynamic quantization")
+    parser.add_argument("--patch-size", type=int, default=64, help="Patch size (default: 64)")
+    parser.add_argument("--filters", type=int, default=16, help="Base filter count (default: 16)")
+    parser.add_argument("--all", action="store_true", dest="convert_all",
+                        help="Convert all model variants from .tmp_weights/")
+    parser.add_argument("--weights-dir", default=DEFAULT_WEIGHTS_DIR,
+                        help=f"Directory containing weight files (default: {DEFAULT_WEIGHTS_DIR})")
+    args = parser.parse_args()
+
+    if not args.convert_all and not args.checkpoint:
+        parser.error("Either --checkpoint or --all is required")
+
+    os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
+
+    if args.convert_all:
+        results = []
+        for weights_file, onnx_file in MODEL_VARIANTS:
+            checkpoint_path = os.path.join(args.weights_dir, weights_file)
+            output_path = os.path.join(DEFAULT_OUTPUT_DIR, onnx_file)
+
+            if not os.path.exists(checkpoint_path):
+                print(f"\nSkipping {weights_file} (not found in {args.weights_dir})")
+                continue
+
+            print(f"\n{'='*60}")
+            print(f"Converting: {weights_file} -> {onnx_file}")
+            print(f"{'='*60}")
+            ok = convert_single(checkpoint_path, output_path, args.quantize,
+                                args.patch_size, args.filters)
+            results.append((onnx_file, ok))
+
+        print(f"\n{'='*60}")
+        print("Summary:")
+        for name, ok in results:
+            status = "OK" if ok else "FAILED"
+            print(f"  {name}: {status}")
+        if not results:
+            print("  No weight files found. Run scripts/download_weights.sh first.")
+            sys.exit(1)
+        if not all(ok for _, ok in results):
+            sys.exit(1)
+    else:
+        if not os.path.exists(args.checkpoint):
+            print(f"Checkpoint not found: {args.checkpoint}")
+            sys.exit(1)
+
+        output_path = args.output or os.path.join(DEFAULT_OUTPUT_DIR, "vesselboost.onnx")
+        ok = convert_single(args.checkpoint, output_path, args.quantize,
+                            args.patch_size, args.filters)
+        if not ok:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
