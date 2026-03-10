@@ -392,6 +392,50 @@ function padToPatchMultiple(data, dims, patchSize) {
   return { data: result, dims: [nnx, nny, nnz] };
 }
 
+/**
+ * Zero-pad volume so each dimension is a multiple of patchSize.
+ * Unlike padToPatchMultiple (which resizes), this preserves voxel spacing.
+ */
+function zeroPadToPatchMultiple(data, dims, patchSize) {
+  const [nx, ny, nz] = dims;
+  const pad = (d, p) => d > p && d % p !== 0 ? Math.ceil(d / p) * p : d < p ? p : d;
+  const nnx = pad(nx, patchSize);
+  const nny = pad(ny, patchSize);
+  const nnz = pad(nz, patchSize);
+
+  if (nnx === nx && nny === ny && nnz === nz) {
+    return { data, dims: [nx, ny, nz] };
+  }
+
+  const result = new Float32Array(nnx * nny * nnz); // initialized to 0
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        result[x + y * nnx + z * nnx * nny] = data[x + y * nx + z * nx * ny];
+      }
+    }
+  }
+
+  return { data: result, dims: [nnx, nny, nnz] };
+}
+
+/**
+ * Crop a volume back to target dimensions (inverse of zero-padding).
+ */
+function cropVolume(data, dims, tgtDims, OutputCtor = Uint8Array) {
+  const [nx, ny, nz] = dims;
+  const [tnx, tny, tnz] = tgtDims;
+  const result = new OutputCtor(tnx * tny * tnz);
+  for (let z = 0; z < tnz; z++) {
+    for (let y = 0; y < tny; y++) {
+      for (let x = 0; x < tnx; x++) {
+        result[x + y * tnx + z * tnx * tny] = data[x + y * nx + z * nx * ny];
+      }
+    }
+  }
+  return result;
+}
+
 function computeResampledDims(dims, srcSpacing, tgtSpacing) {
   return [
     Math.max(1, Math.round(dims[0] * srcSpacing[0] / tgtSpacing[0])),
@@ -754,6 +798,62 @@ function removeSmallComponents(binaryMask, dims, minSize) {
   return result;
 }
 
+/**
+ * Keep only the largest connected component and fill interior holes.
+ * Matches FreeSurfer SynthStrip: connected_component_mask(k=1, fill=True).
+ */
+function keepLargestComponentAndFill(binaryMask, dims) {
+  const n = dims[0] * dims[1] * dims[2];
+  const { labels, numComponents } = connectedComponents3D(binaryMask, dims);
+
+  if (numComponents <= 1) return binaryMask;
+
+  // Find largest component
+  const sizes = new Int32Array(numComponents + 1);
+  for (let i = 0; i < n; i++) {
+    if (labels[i] > 0) sizes[labels[i]]++;
+  }
+  let largestLabel = 1;
+  for (let l = 2; l <= numComponents; l++) {
+    if (sizes[l] > sizes[largestLabel]) largestLabel = l;
+  }
+
+  // Keep only largest
+  const result = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (labels[i] === largestLabel) result[i] = 1;
+  }
+
+  // Fill interior holes: find background CC touching the volume border,
+  // then mark all other background voxels as brain (they are holes)
+  const inverted = new Uint8Array(n);
+  for (let i = 0; i < n; i++) inverted[i] = result[i] ? 0 : 1;
+  const bgCC = connectedComponents3D(inverted, dims);
+
+  // Find which background labels touch the border
+  const [nx, ny, nz] = dims;
+  const borderLabels = new Set();
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        if (x === 0 || x === nx-1 || y === 0 || y === ny-1 || z === 0 || z === nz-1) {
+          const idx = z*ny*nx + y*nx + x;
+          if (bgCC.labels[idx] > 0) borderLabels.add(bgCC.labels[idx]);
+        }
+      }
+    }
+  }
+
+  // Fill interior holes (background components not touching border)
+  for (let i = 0; i < n; i++) {
+    if (bgCC.labels[i] > 0 && !borderLabels.has(bgCC.labels[i])) {
+      result[i] = 1;
+    }
+  }
+
+  return result;
+}
+
 // ==================== Inverse Transform ====================
 
 function uncrop(croppedData, croppedDims, fullDims, origin) {
@@ -1107,27 +1207,30 @@ async function stepSynthStrip(params) {
     currentDims = [...rasDims];
   }
 
-  // 2. Min-max normalize to [0,1]
+  // 2. Normalize to [0,1] using percentile-based scaling (matches FreeSurfer SynthStrip)
   postProgress(0.05, `${modeLabel}: normalizing...`);
-  let vMin = Infinity, vMax = -Infinity;
+  let vMin = Infinity;
   for (let i = 0; i < currentData.length; i++) {
     if (currentData[i] < vMin) vMin = currentData[i];
-    if (currentData[i] > vMax) vMax = currentData[i];
   }
-  const vRange = vMax - vMin || 1;
+  // Compute 99th percentile for robust normalization (avoids outlier compression)
+  const sorted = Float32Array.from(currentData).sort();
+  const p99Idx = Math.floor(currentData.length * 0.99);
+  const p99 = sorted[p99Idx];
+  const vRange = p99 - vMin || 1;
   const normalized = new Float32Array(currentData.length);
   for (let i = 0; i < currentData.length; i++) {
-    normalized[i] = (currentData[i] - vMin) / vRange;
+    normalized[i] = Math.min(1, Math.max(0, (currentData[i] - vMin) / vRange));
   }
   currentData = normalized;
-  postLog(`Normalized to [0,1]: input range [${vMin.toFixed(2)}, ${vMax.toFixed(2)}]`);
+  postLog(`Normalized to [0,1]: min=${vMin.toFixed(2)}, p99=${p99.toFixed(2)}`);
 
-  // 3. Pad to patch multiples
+  // 3. Zero-pad to patch multiples (preserves voxel spacing unlike resize)
   postProgress(0.07, `${modeLabel}: padding...`);
   const prePadDims = [...currentDims];
-  const padded = padToPatchMultiple(currentData, currentDims, PATCH_SIZE);
+  const padded = zeroPadToPatchMultiple(currentData, currentDims, PATCH_SIZE);
   if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
-    postLog(`Padded: ${currentDims.join('x')} -> ${padded.dims.join('x')}`);
+    postLog(`Zero-padded: ${currentDims.join('x')} -> ${padded.dims.join('x')}`);
     currentData = padded.data;
     currentDims = padded.dims;
   }
@@ -1187,7 +1290,8 @@ async function stepSynthStrip(params) {
     }
   }
 
-  // 7. Threshold SDT at 0 -> brain mask (SDT < 0 means inside brain)
+  // 7. Threshold SDT -> brain mask (SDT < border means inside brain; FreeSurfer default border=1)
+  const SDT_BORDER = 1;
   postProgress(0.87, `${modeLabel}: creating brain mask...`);
   let sdtMin = Infinity, sdtMax = -Infinity;
   for (let i = 0; i < totalVoxels; i++) {
@@ -1198,21 +1302,25 @@ async function stepSynthStrip(params) {
   const paddedMask = new Uint8Array(totalVoxels);
   let maskCount = 0;
   for (let i = 0; i < totalVoxels; i++) {
-    if (sdtAccum[i] < 0) {
+    if (sdtAccum[i] < SDT_BORDER) {
       paddedMask[i] = 1;
       maskCount++;
     }
   }
 
-  // Unpad back to resampled dims if padded
+  // Crop back to resampled dims (inverse of zero-padding)
   let resampledMask;
   if (prePadDims[0] !== currentDims[0] || prePadDims[1] !== currentDims[1] || prePadDims[2] !== currentDims[2]) {
-    resampledMask = resampleLabelsNearest(paddedMask, currentDims, prePadDims);
+    resampledMask = cropVolume(paddedMask, currentDims, prePadDims);
   } else {
     resampledMask = paddedMask;
   }
 
-  // 8. Resample mask back to original RAS dims
+  // 8. Keep largest connected component and fill holes (matches FreeSurfer)
+  postProgress(0.89, `${modeLabel}: cleaning mask...`);
+  resampledMask = keepLargestComponentAndFill(resampledMask, prePadDims);
+
+  // 9. Resample mask back to original RAS dims
   postProgress(0.90, `${modeLabel}: resampling mask...`);
   let finalMask;
   if (needsResample) {
@@ -1228,11 +1336,11 @@ async function stepSynthStrip(params) {
   const coverage = (100 * finalCount / rasData.length).toFixed(1);
   postLog(`${modeLabel} brain mask: ${finalCount} voxels (${coverage}% coverage)`);
 
-  // 9. Store brain mask (save previous for skip-undo)
+  // 10. Store brain mask (save previous for skip-undo)
   workerState.preBETMask = workerState.brainMask;
   workerState.brainMask = finalMask;
 
-  // 10. Post masked preview
+  // 11. Post masked preview
   const maskedPreview = new Float32Array(rasData.length);
   for (let i = 0; i < rasData.length; i++) {
     maskedPreview[i] = finalMask[i] ? rasData[i] : 0;
