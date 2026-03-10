@@ -32,6 +32,7 @@ const MAX_PROCESSING_VOXELS = 100 * 1024 * 1024;
 
 let workerState = {
   headerBytes: null,
+  origHeaderBytes: null,
   origDims: null,
   affine: null,
   perm: null,
@@ -47,6 +48,7 @@ let workerState = {
 function resetState() {
   workerState = {
     headerBytes: null,
+    origHeaderBytes: null,
     origDims: null,
     affine: null,
     perm: null,
@@ -895,10 +897,13 @@ function stepLoad(inputData) {
   workerState.isIdentity = isIdentity;
 
   if (isIdentity) {
+    workerState.origHeaderBytes = headerBytes.slice(0);
     workerState.rasData = imageData;
     workerState.rasDims = [...dims];
     workerState.rasSpacing = [...voxelSize];
   } else {
+    workerState.origHeaderBytes = headerBytes.slice(0);
+
     const oriented = orientToRAS(imageData, dims, perm, flip);
     workerState.rasData = oriented.data;
     workerState.rasDims = oriented.dims;
@@ -1439,7 +1444,7 @@ async function stepInference(params) {
   }
 
   // Create output NIfTI
-  const outputNifti = createOutputNifti(outputLabels, workerState.headerBytes, workerState.origDims);
+  const outputNifti = createOutputNifti(outputLabels, workerState.origHeaderBytes, workerState.origDims);
   postStageData('segmentation', outputNifti, 'Vessel segmentation');
 
   let finalVoxels = 0;

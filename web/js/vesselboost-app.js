@@ -13,6 +13,7 @@ import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
 import { generateNiivueColormap, getLabelName } from './app/labels.js';
+import { computePercentiles } from './modules/ui/percentile.js';
 
 class VesselBoostApp {
   constructor() {
@@ -376,13 +377,19 @@ class VesselBoostApp {
     if (resetBtn) {
       resetBtn.addEventListener('click', () => {
         if (!this.nv.volumes.length) return;
-        const vol = this.nv.volumes[0];
-        vol.cal_min = vol.global_min ?? 0;
-        vol.cal_max = vol.global_max ?? 1;
-        this.nv.updateGLVolume();
-        this.syncWindowControls();
+        this.applyAutoContrast();
       });
     }
+  }
+
+  applyAutoContrast() {
+    if (!this.nv.volumes.length) return;
+    const vol = this.nv.volumes[0];
+    const { low, high } = computePercentiles(vol.img, 2, 98, 4096, vol.global_min, vol.global_max);
+    vol.cal_min = low;
+    vol.cal_max = high;
+    this.nv.updateGLVolume();
+    this.syncWindowControls();
   }
 
   syncWindowControls() {
@@ -496,6 +503,7 @@ class VesselBoostApp {
     await this.viewerController.loadBaseVolume(file);
     this.applyDefaultBaseColormap();
     this.syncWindowControls();
+    this.applyAutoContrast();
 
     // Send data to worker for loading
     const inputData = await file.arrayBuffer();
@@ -656,15 +664,12 @@ class VesselBoostApp {
   }
 
   resetProcessingInputs() {
-    // Reset BET method (but respect WASM availability)
+    // Reset BET method to SynthStrip (default)
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
-      const betOption = betMethodSelect.querySelector('option[value="bet"]');
-      if (betOption && !betOption.disabled) {
-        betMethodSelect.value = 'bet';
-        const fiGroup = document.getElementById('betFiGroup');
-        if (fiGroup) fiGroup.style.display = '';
-      }
+      betMethodSelect.value = 'synthstrip';
+      const fiGroup = document.getElementById('betFiGroup');
+      if (fiGroup) fiGroup.style.display = 'none';
     }
 
     const betFiInput = document.getElementById('betFiInput');
@@ -888,6 +893,7 @@ class VesselBoostApp {
         await this.viewerController.loadBaseVolume(result.file);
         this.applyDefaultBaseColormap();
         this.syncWindowControls();
+        this.applyAutoContrast();
       }
     }
 
