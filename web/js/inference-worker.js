@@ -707,6 +707,28 @@ function accumulatePatch3D(probAccum, weightAccum, volumeDims, position, output,
   }
 }
 
+/** Direct-write patch into output (no weighting). For non-overlapping tiling. */
+function writePatch3D(dest, volumeDims, position, output, patchDims) {
+  const [v0, v1, v2] = volumeDims;
+  const [p0, p1, p2] = patchDims;
+  const [o0, o1, o2] = position;
+
+  for (let i0 = 0; i0 < p0; i0++) {
+    const g0 = o0 + i0;
+    if (g0 < 0 || g0 >= v0) continue;
+    for (let i1 = 0; i1 < p1; i1++) {
+      const g1 = o1 + i1;
+      if (g1 < 0 || g1 >= v1) continue;
+      for (let i2 = 0; i2 < p2; i2++) {
+        const g2 = o2 + i2;
+        if (g2 < 0 || g2 >= v2) continue;
+
+        dest[g0 + g1 * v0 + g2 * v0 * v1] = output[i0 * p1 * p2 + i1 * p2 + i2];
+      }
+    }
+  }
+}
+
 // ==================== Postprocessing ====================
 
 function connectedComponents3D(binaryMask, dims) {
@@ -1187,8 +1209,8 @@ async function stepSynthStrip(params) {
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
   const fast = !!params.fast;
   const PATCH_SIZE = 96;
-  const OVERLAP = fast ? 0.25 : 0.5;
-  const TARGET_SPACING = [1.0, 1.0, 1.0];
+  const OVERLAP = fast ? 0 : 0.5;
+  const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
 
   postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
@@ -1203,7 +1225,7 @@ async function stepSynthStrip(params) {
     currentDims = resampled.dims;
     postLog(`Resampled: ${rasDims.join('x')} -> ${currentDims.join('x')} (${TARGET_SPACING[0]}mm isotropic)`);
   } else {
-    currentData = new Float32Array(rasData);
+    currentData = rasData;
     currentDims = [...rasDims];
   }
 
@@ -1213,10 +1235,21 @@ async function stepSynthStrip(params) {
   for (let i = 0; i < currentData.length; i++) {
     if (currentData[i] < vMin) vMin = currentData[i];
   }
-  // Compute 99th percentile for robust normalization (avoids outlier compression)
-  const sorted = Float32Array.from(currentData).sort();
-  const p99Idx = Math.floor(currentData.length * 0.99);
-  const p99 = sorted[p99Idx];
+  // Compute 99th percentile — use sampling in fast mode to avoid full sort
+  let p99;
+  if (fast) {
+    const sampleSize = Math.min(10000, currentData.length);
+    const sample = new Float32Array(sampleSize);
+    const step = currentData.length / sampleSize;
+    for (let i = 0; i < sampleSize; i++) {
+      sample[i] = currentData[Math.floor(i * step)];
+    }
+    sample.sort();
+    p99 = sample[Math.floor(sampleSize * 0.99)];
+  } else {
+    const sorted = Float32Array.from(currentData).sort();
+    p99 = sorted[Math.floor(currentData.length * 0.99)];
+  }
   const vRange = p99 - vMin || 1;
   const normalized = new Float32Array(currentData.length);
   for (let i = 0; i < currentData.length; i++) {
@@ -1240,24 +1273,36 @@ async function stepSynthStrip(params) {
   const modelUrl = `${modelBaseUrl}/synthstrip.onnx`;
   const modelData = await fetchModel(modelUrl, 'synthstrip.onnx', 0.08, 0.20);
 
-  // 5. Create ONNX session
+  // 5. Create ONNX session (prefer WebGPU, fall back to WASM)
   postProgress(0.28, `${modeLabel}: loading model...`);
-  postLog(`Creating ONNX InferenceSession for ${modeLabel} (wasm)...`);
-  const session = await ort.InferenceSession.create(modelData, {
-    executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all'
-  });
-  postLog(`${modeLabel} session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
+  let session;
+  try {
+    postLog(`Creating ONNX InferenceSession for ${modeLabel} (trying webgpu)...`);
+    session = await ort.InferenceSession.create(modelData, {
+      executionProviders: ['webgpu'],
+      graphOptimizationLevel: 'all'
+    });
+    postLog(`${modeLabel} session created with WebGPU.`);
+  } catch (_gpuErr) {
+    postLog(`WebGPU not available, falling back to WASM.`);
+    session = await ort.InferenceSession.create(modelData, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all'
+    });
+    postLog(`${modeLabel} session created with WASM.`);
+  }
+  postLog(`Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
   // 6. Sliding window inference
-  const gaussianWeights = computeGaussianWeightMap3D(PATCH_SIZE, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE / 8);
+  const useGaussian = OVERLAP > 0;
+  const gaussianWeights = useGaussian ? computeGaussianWeightMap3D(PATCH_SIZE, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE / 8) : null;
   const positions = computePatchPositions3D(currentDims, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE], OVERLAP);
   const totalPatches = positions.length;
   postLog(`${modeLabel} inference: ${totalPatches} patches (${PATCH_SIZE}^3), overlap=${OVERLAP}`);
 
   const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
   const sdtAccum = new Float32Array(totalVoxels);
-  const weightAccum = new Float32Array(totalVoxels);
+  const weightAccum = useGaussian ? new Float32Array(totalVoxels) : null;
 
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
@@ -1272,8 +1317,11 @@ async function stepSynthStrip(params) {
     const output = results[outputName].data;
     inputTensor.dispose();
 
-    // Accumulate SDT output with Gaussian weighting
-    accumulatePatch3D(sdtAccum, weightAccum, currentDims, pos, output, gaussianWeights, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+    if (useGaussian) {
+      accumulatePatch3D(sdtAccum, weightAccum, currentDims, pos, output, gaussianWeights, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+    } else {
+      writePatch3D(sdtAccum, currentDims, pos, output, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+    }
 
     if ((pi + 1) % 5 === 0 || pi === totalPatches - 1) {
       const pct = ((pi + 1) / totalPatches * 100).toFixed(0);
@@ -1283,10 +1331,12 @@ async function stepSynthStrip(params) {
 
   session.release();
 
-  // Average accumulated SDT
-  for (let i = 0; i < totalVoxels; i++) {
-    if (weightAccum[i] > 0) {
-      sdtAccum[i] /= weightAccum[i];
+  // Average accumulated SDT (only needed when using Gaussian weighting)
+  if (useGaussian) {
+    for (let i = 0; i < totalVoxels; i++) {
+      if (weightAccum[i] > 0) {
+        sdtAccum[i] /= weightAccum[i];
+      }
     }
   }
 
