@@ -456,27 +456,27 @@ function embedSliceSubsection(data, subsectionDims, fullDims, startZ) {
   return result;
 }
 
-function zScoreNormalizeNonzero(data) {
+function zScoreNormalize(data) {
   const n = data.length;
-  let sum = 0, count = 0;
+  let sum = 0;
   for (let i = 0; i < n; i++) {
-    if (data[i] !== 0) { sum += data[i]; count++; }
+    sum += data[i];
   }
-  if (count === 0) return new Float32Array(n);
-  const mean = sum / count;
+  const mean = sum / n;
   let sumSq = 0;
   for (let i = 0; i < n; i++) {
-    if (data[i] !== 0) { const d = data[i] - mean; sumSq += d * d; }
+    const d = data[i] - mean;
+    sumSq += d * d;
   }
-  const std = Math.sqrt(sumSq / count) || 1;
+  const std = Math.sqrt(sumSq / n) || 1;
   const result = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    if (data[i] !== 0) result[i] = (data[i] - mean) / std;
+    result[i] = (data[i] - mean) / std;
   }
   return result;
 }
 
-function cropForeground(data, dims, margin) {
+function computeForegroundBBox(data, dims, margin) {
   const [nx, ny, nz] = dims;
   let minX = nx, maxX = 0, minY = ny, maxY = 0, minZ = nz, maxZ = 0;
 
@@ -492,14 +492,26 @@ function cropForeground(data, dims, margin) {
     }
   }
 
-  if (maxX < minX) return { data: new Float32Array(0), dims: [0,0,0], origin: [0,0,0] };
+  if (maxX < minX) return null;
 
-  const ox = Math.max(0, minX - margin);
-  const oy = Math.max(0, minY - margin);
-  const oz = Math.max(0, minZ - margin);
-  const ex = Math.min(nx, maxX + margin + 1);
-  const ey = Math.min(ny, maxY + margin + 1);
-  const ez = Math.min(nz, maxZ + margin + 1);
+  return {
+    origin: [
+      Math.max(0, minX - margin),
+      Math.max(0, minY - margin),
+      Math.max(0, minZ - margin)
+    ],
+    end: [
+      Math.min(nx, maxX + margin + 1),
+      Math.min(ny, maxY + margin + 1),
+      Math.min(nz, maxZ + margin + 1)
+    ]
+  };
+}
+
+function cropVolume(data, dims, bbox) {
+  const [nx, ny] = dims;
+  const [ox, oy, oz] = bbox.origin;
+  const [ex, ey, ez] = bbox.end;
   const cnx = ex - ox, cny = ey - oy, cnz = ez - oz;
 
   const result = new Float32Array(cnx * cny * cnz);
@@ -1161,17 +1173,21 @@ async function stepInference(params) {
   }
   const processingDims = [...currentDims];
 
-  // Normalize
-  postProgress(0.10, 'Normalizing...');
-  postLog('Z-score normalizing (nonzero voxels)...');
-  currentData = zScoreNormalizeNonzero(currentData);
-
-  // Crop foreground
-  postProgress(0.12, 'Cropping foreground...');
-  const cropped = cropForeground(currentData, currentDims, CROP_MARGIN);
-  if (cropped.dims[0] === 0) {
+  // Compute foreground bounding box on raw data (before normalization)
+  postProgress(0.10, 'Computing foreground...');
+  const bbox = computeForegroundBBox(currentData, currentDims, CROP_MARGIN);
+  if (!bbox) {
     throw new Error('No foreground voxels found in volume');
   }
+
+  // Normalize (z-score over ALL voxels, matching Python standardiser)
+  postProgress(0.11, 'Normalizing...');
+  postLog('Z-score normalizing (all voxels)...');
+  currentData = zScoreNormalize(currentData);
+
+  // Crop using pre-computed bounding box
+  postProgress(0.12, 'Cropping foreground...');
+  const cropped = cropVolume(currentData, currentDims, bbox);
   currentData = cropped.data;
   currentDims = cropped.dims;
   const cropOrigin = cropped.origin;
