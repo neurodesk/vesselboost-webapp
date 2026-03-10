@@ -363,6 +363,37 @@ function orientToRAS(data, dims, perm, flip) {
   return { data: result, dims: dstDims };
 }
 
+function padToPatchMultiple(data, dims, patchSize) {
+  const [nx, ny, nz] = dims;
+  const pad = (d, p) => d > p && d % p !== 0 ? Math.ceil(d / p) * p : d < p ? p : d;
+  const nnx = pad(nx, patchSize);
+  const nny = pad(ny, patchSize);
+  const nnz = pad(nz, patchSize);
+
+  if (nnx === nx && nny === ny && nnz === nz) {
+    return { data, dims: [nx, ny, nz] };
+  }
+
+  // Nearest-neighbor resize matching scipy.ndimage.zoom(order=0, mode='nearest')
+  const result = new Float32Array(nnx * nny * nnz);
+  const scaleX = nx / nnx;
+  const scaleY = ny / nny;
+  const scaleZ = nz / nnz;
+
+  for (let z = 0; z < nnz; z++) {
+    const sz = Math.min(Math.floor(z * scaleZ), nz - 1);
+    for (let y = 0; y < nny; y++) {
+      const sy = Math.min(Math.floor(y * scaleY), ny - 1);
+      for (let x = 0; x < nnx; x++) {
+        const sx = Math.min(Math.floor(x * scaleX), nx - 1);
+        result[x + y * nnx + z * nnx * nny] = data[sx + sy * nx + sz * nx * ny];
+      }
+    }
+  }
+
+  return { data: result, dims: [nnx, nny, nnz] };
+}
+
 function computeResampledDims(dims, srcSpacing, tgtSpacing) {
   return [
     Math.max(1, Math.round(dims[0] * srcSpacing[0] / tgtSpacing[0])),
@@ -1142,34 +1173,14 @@ async function stepInference(params) {
   let currentSpacing = [...workerState.rasSpacing];
   const rasProcessingDims = [...currentDims];
 
-  // Resample to fixed 0.3mm spacing
-  postProgress(0.05, 'Resampling...');
-  const targetSpacing = FIXED_TARGET_SPACING;
-  const needsResample = currentSpacing.some((s, i) => Math.abs(s - targetSpacing[i]) > 0.01);
-
-  if (needsResample) {
-    const projectedDims = computeResampledDims(currentDims, currentSpacing, targetSpacing);
-    const projectedVoxels = projectedDims[0] * projectedDims[1] * projectedDims[2];
-    if (projectedVoxels > MAX_PROCESSING_VOXELS) {
-      throw new Error(
-        `Selected subsection is too large at 0.3mm (${projectedDims.join('x')}, ${(projectedVoxels / 1e6).toFixed(0)}M voxels). `
-        + 'Reduce the slice range and try again.'
-      );
-    }
-
-    postLog(`Resampling to ${targetSpacing.map(s => s.toFixed(2)).join('x')}mm...`);
-    try {
-      const resampled = resampleVolume(currentData, currentDims, currentSpacing, targetSpacing);
-      currentData = resampled.data;
-      currentDims = resampled.dims;
-      currentSpacing = resampled.spacing;
-      postLog(`Resampled: ${currentDims.join('x')}`);
-    } catch (e) {
-      if (e?.message && /Array buffer allocation failed|Invalid typed array length/i.test(e.message)) {
-        throw new Error('Resampling ran out of memory. Reduce the slice range and try again.');
-      }
-      throw e;
-    }
+  // Pad to multiples of patch size (matching Python: nearest-neighbor zoom)
+  postProgress(0.05, 'Padding to patch grid...');
+  const prePadDims = [...currentDims];
+  const padded = padToPatchMultiple(currentData, currentDims, PATCH_DIM0);
+  if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
+    postLog(`Padded: ${currentDims.join('x')} -> ${padded.dims.join('x')} (nearest-neighbor)`);
+    currentData = padded.data;
+    currentDims = padded.dims;
   }
   const processingDims = [...currentDims];
 
@@ -1279,9 +1290,9 @@ async function stepInference(params) {
   postLog('Applying inverse transforms...');
   let outputLabels = uncrop(cleanedMask, currentDims, processingDims, cropOrigin);
 
-  // Inverse resample back to native RAS subsection dims
-  if (needsResample) {
-    outputLabels = resampleLabelsNearest(outputLabels, processingDims, rasProcessingDims);
+  // Inverse resize back to pre-pad dimensions
+  if (prePadDims[0] !== processingDims[0] || prePadDims[1] !== processingDims[1] || prePadDims[2] !== processingDims[2]) {
+    outputLabels = resampleLabelsNearest(outputLabels, processingDims, prePadDims);
   }
 
   // Apply brain mask (extract subset for slice range)
