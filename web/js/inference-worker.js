@@ -1062,6 +1062,162 @@ function stepBET(params) {
   postStepComplete('bet');
 }
 
+async function stepSynthStrip(params) {
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
+  }
+
+  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
+  const PATCH_SIZE = 96;
+  const OVERLAP = 0.5;
+  const TARGET_SPACING = [1.0, 1.0, 1.0];
+
+  postProgress(0.02, 'SynthStrip: resampling to 1mm...');
+  postLog('Running SynthStrip brain extraction...');
+
+  // 1. Resample to 1mm isotropic
+  const needsResample = rasSpacing[0] !== 1.0 || rasSpacing[1] !== 1.0 || rasSpacing[2] !== 1.0;
+  let currentData, currentDims;
+  if (needsResample) {
+    const resampled = resampleVolume(rasData, rasDims, rasSpacing, TARGET_SPACING);
+    currentData = resampled.data;
+    currentDims = resampled.dims;
+    postLog(`Resampled: ${rasDims.join('x')} -> ${currentDims.join('x')} (1mm isotropic)`);
+  } else {
+    currentData = new Float32Array(rasData);
+    currentDims = [...rasDims];
+  }
+
+  // 2. Min-max normalize to [0,1]
+  postProgress(0.05, 'SynthStrip: normalizing...');
+  let vMin = Infinity, vMax = -Infinity;
+  for (let i = 0; i < currentData.length; i++) {
+    if (currentData[i] < vMin) vMin = currentData[i];
+    if (currentData[i] > vMax) vMax = currentData[i];
+  }
+  const vRange = vMax - vMin || 1;
+  const normalized = new Float32Array(currentData.length);
+  for (let i = 0; i < currentData.length; i++) {
+    normalized[i] = (currentData[i] - vMin) / vRange;
+  }
+  currentData = normalized;
+  postLog(`Normalized to [0,1]: input range [${vMin.toFixed(2)}, ${vMax.toFixed(2)}]`);
+
+  // 3. Pad to patch multiples
+  postProgress(0.07, 'SynthStrip: padding...');
+  const prePadDims = [...currentDims];
+  const padded = padToPatchMultiple(currentData, currentDims, PATCH_SIZE);
+  if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
+    postLog(`Padded: ${currentDims.join('x')} -> ${padded.dims.join('x')}`);
+    currentData = padded.data;
+    currentDims = padded.dims;
+  }
+
+  // 4. Download model
+  const modelBaseUrl = params.modelBaseUrl;
+  const modelUrl = `${modelBaseUrl}/synthstrip.onnx`;
+  const modelData = await fetchModel(modelUrl, 'synthstrip.onnx', 0.08, 0.20);
+
+  // 5. Create ONNX session
+  postProgress(0.28, 'SynthStrip: loading model...');
+  postLog('Creating ONNX InferenceSession for SynthStrip (wasm)...');
+  const session = await ort.InferenceSession.create(modelData, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all'
+  });
+  postLog(`SynthStrip session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
+
+  // 6. Sliding window inference (96x96x96, 50% overlap)
+  const gaussianWeights = computeGaussianWeightMap3D(PATCH_SIZE, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE / 8);
+  const positions = computePatchPositions3D(currentDims, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE], OVERLAP);
+  const totalPatches = positions.length;
+  postLog(`SynthStrip inference: ${totalPatches} patches (${PATCH_SIZE}^3), overlap=${OVERLAP}`);
+
+  const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
+  const sdtAccum = new Float32Array(totalVoxels);
+  const weightAccum = new Float32Array(totalVoxels);
+
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const patchVoxels = PATCH_SIZE * PATCH_SIZE * PATCH_SIZE;
+
+  for (let pi = 0; pi < totalPatches; pi++) {
+    const pos = positions[pi];
+    const patch = extractPatch3D(currentData, currentDims, pos, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+
+    const inputTensor = new ort.Tensor('float32', patch, [1, 1, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+    const results = await session.run({ [inputName]: inputTensor });
+    const output = results[outputName].data;
+    inputTensor.dispose();
+
+    // Accumulate SDT output with Gaussian weighting
+    accumulatePatch3D(sdtAccum, weightAccum, currentDims, pos, output, gaussianWeights, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE]);
+
+    if ((pi + 1) % 5 === 0 || pi === totalPatches - 1) {
+      const pct = ((pi + 1) / totalPatches * 100).toFixed(0);
+      postProgress(0.30 + 0.55 * (pi + 1) / totalPatches, `SynthStrip: patch ${pi + 1}/${totalPatches} (${pct}%)`);
+    }
+  }
+
+  session.release();
+
+  // Average accumulated SDT
+  for (let i = 0; i < totalVoxels; i++) {
+    if (weightAccum[i] > 0) {
+      sdtAccum[i] /= weightAccum[i];
+    }
+  }
+
+  // 7. Threshold SDT at 0 -> brain mask (SDT > 0 means inside brain)
+  postProgress(0.87, 'SynthStrip: creating brain mask...');
+  const paddedMask = new Uint8Array(totalVoxels);
+  let maskCount = 0;
+  for (let i = 0; i < totalVoxels; i++) {
+    if (sdtAccum[i] > 0) {
+      paddedMask[i] = 1;
+      maskCount++;
+    }
+  }
+
+  // Unpad back to resampled dims if padded
+  let resampledMask;
+  if (prePadDims[0] !== currentDims[0] || prePadDims[1] !== currentDims[1] || prePadDims[2] !== currentDims[2]) {
+    resampledMask = resampleLabelsNearest(paddedMask, currentDims, prePadDims);
+  } else {
+    resampledMask = paddedMask;
+  }
+
+  // 8. Resample mask back to original RAS dims
+  postProgress(0.90, 'SynthStrip: resampling mask...');
+  let finalMask;
+  if (needsResample) {
+    finalMask = resampleLabelsNearest(resampledMask, prePadDims, rasDims);
+  } else {
+    finalMask = resampledMask;
+  }
+
+  let finalCount = 0;
+  for (let i = 0; i < finalMask.length; i++) {
+    if (finalMask[i]) finalCount++;
+  }
+  const coverage = (100 * finalCount / rasData.length).toFixed(1);
+  postLog(`SynthStrip brain mask: ${finalCount} voxels (${coverage}% coverage)`);
+
+  // 9. Store brain mask
+  workerState.brainMask = finalMask;
+
+  // 10. Post masked preview
+  const maskedPreview = new Float32Array(rasData.length);
+  for (let i = 0; i < rasData.length; i++) {
+    maskedPreview[i] = finalMask[i] ? rasData[i] : 0;
+  }
+  const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
+  postStageData('bet', betNifti, 'SynthStrip brain extraction');
+
+  postProgress(1.0, 'SynthStrip complete');
+  postStepComplete('bet');
+}
+
 function stepDenoise() {
   if (!workerState.rasData) {
     throw new Error('No volume loaded. Run Load first.');
@@ -1321,7 +1477,7 @@ self.onmessage = async (e) => {
           storeName: 'models'
         });
 
-        self.postMessage({ type: 'initialized' });
+        self.postMessage({ type: 'initialized', wasmPreprocessingAvailable: self._wasmReady });
       } catch (error) {
         postError(`Initialization failed: ${error.message}`);
       }
@@ -1347,7 +1503,16 @@ self.onmessage = async (e) => {
 
     case 'run-bet':
       try {
-        stepBET(data || {});
+        const betParams = data || {};
+        if (betParams.method === 'synthstrip') {
+          // SynthStrip needs modelBaseUrl - derive from app version
+          if (!betParams.modelBaseUrl) {
+            betParams.modelBaseUrl = './models';
+          }
+          await stepSynthStrip(betParams);
+        } else {
+          stepBET(betParams);
+        }
       } catch (error) {
         console.error('BET error:', error);
         postError(error?.message || String(error));

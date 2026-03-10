@@ -23,6 +23,7 @@ export class InferenceExecutor {
     this.workerInitializing = false;
     this.running = false;
     this.webgpuAvailable = false;
+    this.wasmAvailable = false;
     this.results = {};
     this.stageOrder = [];
 
@@ -70,6 +71,7 @@ export class InferenceExecutor {
           this.workerReady = true;
           this.workerInitializing = false;
           this.webgpuAvailable = !!data.webgpuAvailable;
+          this.wasmAvailable = !!data.wasmPreprocessingAvailable;
           this.updateOutput('ONNX Runtime ready');
           this.onInitialized();
           break;
@@ -196,11 +198,11 @@ export class InferenceExecutor {
     this.onStepComplete('n4');
   }
 
-  async runBET(fractionalIntensity) {
+  async runBET(fractionalIntensity, method = 'bet', modelBaseUrl) {
     await this.initialize();
     this.running = true;
     this.stepStatus.bet = 'running';
-    this.worker.postMessage({ type: 'run-bet', data: { fractionalIntensity } });
+    this.worker.postMessage({ type: 'run-bet', data: { fractionalIntensity, method, modelBaseUrl } });
   }
 
   skipBET() {

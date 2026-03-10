@@ -151,6 +151,17 @@ class VesselBoostApp {
     const skipBET = document.getElementById('skipBETBtn');
     if (skipBET) skipBET.addEventListener('click', () => this.skipBET());
 
+    // BET method dropdown: toggle FI visibility
+    const betMethodSelect = document.getElementById('betMethodSelect');
+    if (betMethodSelect) {
+      betMethodSelect.addEventListener('change', () => {
+        const fiGroup = document.getElementById('betFiGroup');
+        if (fiGroup) {
+          fiGroup.style.display = betMethodSelect.value === 'synthstrip' ? 'none' : '';
+        }
+      });
+    }
+
     const runDenoise = document.getElementById('runDenoiseBtn');
     if (runDenoise) runDenoise.addEventListener('click', () => this.runDenoise());
 
@@ -530,10 +541,13 @@ class VesselBoostApp {
 
   async runBET() {
     if (this.inferenceExecutor.isRunning()) return;
+    const methodSelect = document.getElementById('betMethodSelect');
+    const method = methodSelect ? methodSelect.value : 'bet';
     const betFiInput = document.getElementById('betFiInput');
     const fi = betFiInput ? parseFloat(betFiInput.value) : 0.5;
     this.setStepRunning('bet');
-    await this.inferenceExecutor.runBET(fi);
+    const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
+    await this.inferenceExecutor.runBET(fi, method, modelBaseUrl);
   }
 
   skipBET() {
@@ -642,6 +656,17 @@ class VesselBoostApp {
   }
 
   resetProcessingInputs() {
+    // Reset BET method (but respect WASM availability)
+    const betMethodSelect = document.getElementById('betMethodSelect');
+    if (betMethodSelect) {
+      const betOption = betMethodSelect.querySelector('option[value="bet"]');
+      if (betOption && !betOption.disabled) {
+        betMethodSelect.value = 'bet';
+        const fiGroup = document.getElementById('betFiGroup');
+        if (fiGroup) fiGroup.style.display = '';
+      }
+    }
+
     const betFiInput = document.getElementById('betFiInput');
     if (betFiInput) betFiInput.value = String(Config.INFERENCE_DEFAULTS.fractionalIntensity);
 
@@ -1012,7 +1037,17 @@ class VesselBoostApp {
   }
 
   onWorkerInitialized() {
-    // WebGPU not used (3D ops unsupported), nothing to toggle
+    // If WASM preprocessing not available, auto-select SynthStrip and disable BET option
+    const betMethodSelect = document.getElementById('betMethodSelect');
+    if (betMethodSelect && !this.inferenceExecutor.wasmAvailable) {
+      betMethodSelect.value = 'synthstrip';
+      // Disable the BET option
+      const betOption = betMethodSelect.querySelector('option[value="bet"]');
+      if (betOption) betOption.disabled = true;
+      // Hide FI group
+      const fiGroup = document.getElementById('betFiGroup');
+      if (fiGroup) fiGroup.style.display = 'none';
+    }
   }
 
   onInferenceComplete() {

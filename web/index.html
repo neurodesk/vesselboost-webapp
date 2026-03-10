@@ -85,8 +85,15 @@
           <span class="step-badge" id="stepBETBadge"></span>
         </h2>
         <div class="section-content">
-          <p class="step-description">Brain mask applied to final segmentation output. Can re-run with different threshold.</p>
+          <p class="step-description">Brain mask applied to final segmentation output. Can re-run with different settings.</p>
           <div class="param-group">
+            <label class="param-label" for="betMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">BET: traditional brain extraction (requires WASM). SynthStrip: deep-learning skull-stripping (works without WASM).</span></span></label>
+            <select id="betMethodSelect">
+              <option value="bet">BET (traditional)</option>
+              <option value="synthstrip">SynthStrip</option>
+            </select>
+          </div>
+          <div id="betFiGroup" class="param-group">
             <label class="param-label" for="betFiInput">Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0-1.0). Smaller values give larger brain outlines. Default: 0.5.</span></span></label>
             <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
           </div>
@@ -408,6 +415,11 @@
           <strong>FSL BET</strong>
           <p>Smith SM. Fast robust automated brain extraction. Human Brain Mapping. 2002;17(3):143-155.</p>
           <a href="https://doi.org/10.1002/hbm.10062" target="_blank" rel="noopener">https://doi.org/10.1002/hbm.10062</a>
+        </div>
+        <div class="citation-item">
+          <strong>SynthStrip</strong>
+          <p>Hoopes A, Mora JS, Dalca AV, Fischl B, Hoffmann M. SynthStrip: Skull-Stripping for Any Brain Image. NeuroImage. 2022;260:119474.</p>
+          <a href="https://doi.org/10.1016/j.neuroimage.2022.119474" target="_blank" rel="noopener">https://doi.org/10.1016/j.neuroimage.2022.119474</a>
         </div>
       </div>
 

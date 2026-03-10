@@ -10,6 +10,13 @@ export const MODEL = {
   patchSize: [64, 64, 64]
 };
 
+export const SYNTHSTRIP_MODEL = {
+  name: 'synthstrip.onnx',
+  label: 'SynthStrip',
+  patchSize: [96, 96, 96],
+  targetSpacing: [1.0, 1.0, 1.0]
+};
+
 export const INFERENCE_DEFAULTS = {
   cropForegroundMargin: 20,
   overlap: 0,
@@ -55,4 +62,4 @@ export const CACHE_CONFIG = {
 
 export const PIPELINE_STEPS = ['load', 'n4', 'bet', 'denoise', 'inference'];
 
-if (typeof self !== 'undefined') self.VesselBoostConfig = { VERSION, MODEL_BASE_URL, MODEL, INFERENCE_DEFAULTS, VIEWER_CONFIG, PROGRESS_CONFIG, STAGE_NAMES, ONNX_CONFIG, CACHE_CONFIG, PIPELINE_STEPS };
+if (typeof self !== 'undefined') self.VesselBoostConfig = { VERSION, MODEL_BASE_URL, MODEL, SYNTHSTRIP_MODEL, INFERENCE_DEFAULTS, VIEWER_CONFIG, PROGRESS_CONFIG, STAGE_NAMES, ONNX_CONFIG, CACHE_CONFIG, PIPELINE_STEPS };
