@@ -480,21 +480,37 @@ class VesselBoostApp {
   // ==================== File Handling ====================
 
   async onFileLoaded(file) {
+    await this.resetForNewFile();
     this.inputFile = file;
     await this.viewerController.loadBaseVolume(file);
+    this.applyDefaultBaseColormap();
     this.syncWindowControls();
-
-    this.currentResultTab = 'input';
-    const overlayControl = document.getElementById('overlayControl');
-    if (overlayControl) overlayControl.classList.add('hidden');
-
-    // Reset all pipeline steps
-    await this.resetAllSteps();
 
     // Send data to worker for loading
     const inputData = await file.arrayBuffer();
     this.setStepRunning('load');
     await this.inferenceExecutor.loadVolume(inputData);
+  }
+
+  async resetForNewFile() {
+    if (this.inferenceExecutor.isRunning()) {
+      this.inferenceExecutor.cancel();
+    }
+
+    this.inputFile = null;
+    this.currentResultTab = 'input';
+    this._segmentationVisible = true;
+    this._overlaySliderValue = 0.5;
+    this._lastLocationData = null;
+
+    this.console.clear();
+    this.progress.reset();
+    this.resetStatusDisplay();
+    this.resetProcessingInputs();
+    this.resetViewerControls();
+
+    await this.resetAllSteps();
+    this.updateViewerInfo(null);
   }
 
   // ==================== Pipeline Step Methods ====================
@@ -626,6 +642,104 @@ class VesselBoostApp {
 
     const overlayControl = document.getElementById('overlayControl');
     if (overlayControl) overlayControl.classList.add('hidden');
+  }
+
+  resetStatusDisplay() {
+    const statusText = document.getElementById('statusText');
+    if (statusText) statusText.textContent = 'Ready';
+
+    const cancelBtn = document.getElementById('cancelButton');
+    if (cancelBtn) cancelBtn.disabled = true;
+  }
+
+  resetProcessingInputs() {
+    const betFiInput = document.getElementById('betFiInput');
+    if (betFiInput) betFiInput.value = String(Config.INFERENCE_DEFAULTS.fractionalIntensity);
+
+    const sliceStartInput = document.getElementById('sliceStartInput');
+    if (sliceStartInput) {
+      sliceStartInput.value = '0';
+      sliceStartInput.max = '';
+    }
+
+    const sliceEndInput = document.getElementById('sliceEndInput');
+    if (sliceEndInput) {
+      sliceEndInput.value = '0';
+      sliceEndInput.max = '';
+    }
+
+    const sliceTotalDisplay = document.getElementById('sliceTotalDisplay');
+    if (sliceTotalDisplay) sliceTotalDisplay.textContent = 'of 0 slices';
+
+    const overlapSelect = document.getElementById('overlapSelect');
+    if (overlapSelect) overlapSelect.value = String(Config.INFERENCE_DEFAULTS.overlap);
+
+    const thresholdInput = document.getElementById('thresholdInput');
+    if (thresholdInput) thresholdInput.value = String(Config.INFERENCE_DEFAULTS.probabilityThreshold);
+
+    const minSizeInput = document.getElementById('minSizeInput');
+    if (minSizeInput) minSizeInput.value = String(Config.INFERENCE_DEFAULTS.minComponentSize);
+  }
+
+  resetViewerControls() {
+    document.querySelectorAll('.view-tab[data-view]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === 'multiplanar');
+    });
+    this.viewerController.setViewType('multiplanar');
+
+    const rangeMin = document.getElementById('rangeMin');
+    if (rangeMin) rangeMin.value = '0';
+    const rangeMax = document.getElementById('rangeMax');
+    if (rangeMax) rangeMax.value = '100';
+    const rangeSelected = document.getElementById('rangeSelected');
+    if (rangeSelected) {
+      rangeSelected.style.left = '0%';
+      rangeSelected.style.width = '100%';
+    }
+
+    const windowMin = document.getElementById('windowMin');
+    if (windowMin) windowMin.value = '';
+    const windowMax = document.getElementById('windowMax');
+    if (windowMax) windowMax.value = '';
+
+    const overlayControl = document.getElementById('overlayControl');
+    if (overlayControl) overlayControl.classList.add('hidden');
+
+    const opacitySlider = document.getElementById('overlayOpacity');
+    if (opacitySlider) {
+      opacitySlider.disabled = false;
+      opacitySlider.value = '0.5';
+    }
+    const opacityDisplay = document.getElementById('overlayOpacityValue');
+    if (opacityDisplay) opacityDisplay.textContent = '50%';
+
+    const colormapSelect = document.getElementById('colormapSelect');
+    if (colormapSelect) colormapSelect.value = 'gray';
+
+    const interpolationToggle = document.getElementById('interpolation');
+    if (interpolationToggle) interpolationToggle.checked = false;
+    this.nv.setInterpolation(true);
+
+    const colorbarToggle = document.getElementById('colorbarToggle');
+    if (colorbarToggle) colorbarToggle.checked = false;
+    this.nv.opts.isColorbar = false;
+
+    const crosshairToggle = document.getElementById('crosshairToggle');
+    if (crosshairToggle) crosshairToggle.checked = true;
+    this.nv.setCrosshairWidth(Config.VIEWER_CONFIG.crosshairWidth ?? 1);
+
+    const downloadBtn = document.getElementById('downloadCurrentVolume');
+    if (downloadBtn) downloadBtn.disabled = true;
+
+    this.nv.drawScene();
+  }
+
+  applyDefaultBaseColormap() {
+    const colormapSelect = document.getElementById('colormapSelect');
+    const colormap = colormapSelect?.value || 'gray';
+    if (!this.nv.volumes?.length) return;
+    this.nv.volumes[0].colormap = colormap;
+    this.nv.updateGLVolume();
   }
 
   onStepComplete(step) {
@@ -800,6 +914,7 @@ class VesselBoostApp {
       const result = this.inferenceExecutor.getResult(data.stage);
       if (result?.file) {
         await this.viewerController.loadBaseVolume(result.file);
+        this.applyDefaultBaseColormap();
         this.syncWindowControls();
       }
     }

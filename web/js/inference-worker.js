@@ -944,11 +944,32 @@ function stepN4() {
   postProgress(0.1, 'Bias field correction (N4ITK)...');
   postLog('Running N4ITK bias field correction on full RAS volume...');
 
+  // Log input stats for diagnostic comparison
+  let inMin = Infinity, inMax = -Infinity, inSum = 0, inNonzero = 0;
+  for (let i = 0; i < rasData.length; i++) {
+    const v = rasData[i];
+    if (v < inMin) inMin = v;
+    if (v > inMax) inMax = v;
+    if (v !== 0) { inSum += v; inNonzero++; }
+  }
+  postLog(`N4 input stats: min=${inMin.toFixed(2)}, max=${inMax.toFixed(2)}, mean_nz=${inNonzero ? (inSum/inNonzero).toFixed(2) : 'N/A'}, nonzero=${inNonzero}/${rasData.length}`);
+
   const corrected = wasm_bindgen.n4_bias_correct(
     rasData, rasDims[0], rasDims[1], rasDims[2],
     rasSpacing[0], rasSpacing[1], rasSpacing[2],
     4, 50, 0.001
   );
+
+  // Log output stats
+  let outMin = Infinity, outMax = -Infinity, outSum = 0, outNonzero = 0;
+  for (let i = 0; i < corrected.length; i++) {
+    const v = corrected[i];
+    if (v < outMin) outMin = v;
+    if (v > outMax) outMax = v;
+    if (v !== 0) { outSum += v; outNonzero++; }
+  }
+  postLog(`N4 output stats: min=${outMin.toFixed(2)}, max=${outMax.toFixed(2)}, mean_nz=${outNonzero ? (outSum/outNonzero).toFixed(2) : 'N/A'}, nonzero=${outNonzero}/${corrected.length}`);
+
   workerState.rasData = corrected;
   postLog('Bias field correction complete');
 

@@ -20,6 +20,7 @@ export class FileIOController {
         this.file = niftiFile;
         this._updateUI(niftiFile.name);
         this.onFileLoaded(niftiFile);
+        this._resetNativeInput();
       }
     });
   }
@@ -41,6 +42,7 @@ export class FileIOController {
       this._updateUI(niftiFile.name);
       this.updateOutput(`Loaded: ${niftiFile.name}`);
       this.onFileLoaded(niftiFile);
+      this._resetNativeInput();
     } else {
       this.updateOutput(`Detected DICOM input (${files.length} files)`);
       this.dicomController.convertFiles(Array.from(files));
@@ -113,5 +115,11 @@ export class FileIOController {
       if (label) label.textContent = 'Drop NIfTI or DICOM files';
     }
     if (fileList) fileList.innerHTML = '';
+    this._resetNativeInput();
+  }
+
+  _resetNativeInput() {
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput) fileInput.value = '';
   }
 }
