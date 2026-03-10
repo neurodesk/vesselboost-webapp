@@ -584,10 +584,12 @@ class VesselBoostApp {
 
   async runDenoise() {
     if (this.inferenceExecutor.isRunning()) return;
+    const methodSelect = document.getElementById('denoiseMethodSelect');
+    const method = methodSelect ? methodSelect.value : 'bilateral';
     this.setStepRunning('denoise');
     this.inferenceExecutor.resetDownstream('denoise');
     this.resetUIDownstream('denoise');
-    await this.inferenceExecutor.runDenoise();
+    await this.inferenceExecutor.runDenoise(method);
   }
 
   async skipDenoise() {

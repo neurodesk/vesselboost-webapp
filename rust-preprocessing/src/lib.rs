@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 use js_sys;
 
+mod bilateral;
 mod n4itk;
 mod nlm;
 mod utils;
@@ -61,6 +62,33 @@ pub fn nlm_denoise(
         search_radius as usize,
         patch_radius as usize,
         h,
+    )
+}
+
+/// 3D bilateral filter denoising for MRI volumes.
+///
+/// # Arguments
+/// * `data` - Flattened Float32 volume data
+/// * `nx`, `ny`, `nz` - Volume dimensions
+/// * `spatial_radius` - Spatial kernel half-size (default: 2, gives 5x5x5 kernel)
+/// * `sigma_spatial` - Spatial Gaussian sigma (default: 1.5)
+/// * `sigma_intensity` - Intensity Gaussian sigma (0.0 = auto-estimate from noise)
+#[wasm_bindgen]
+pub fn bilateral_denoise(
+    data: &[f32],
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    spatial_radius: u32,
+    sigma_spatial: f32,
+    sigma_intensity: f32,
+) -> Vec<f32> {
+    bilateral::bilateral_filter_impl(
+        data,
+        [nx as usize, ny as usize, nz as usize],
+        spatial_radius as usize,
+        sigma_spatial,
+        sigma_intensity,
     )
 }
 

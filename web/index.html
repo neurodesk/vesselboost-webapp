@@ -113,7 +113,15 @@
           <span class="step-badge" id="stepDenoiseBadge"></span>
         </h2>
         <div class="section-content">
-          <p class="step-description">Non-local means denoising on the full volume. <span class="info-icon">i<span class="info-tooltip">Denoising processes every voxel in the volume and is typically time-consuming. Processing time depends on volume size.</span></span></p>
+          <p class="step-description">Denoise the volume to improve segmentation quality. <span class="info-icon">i<span class="info-tooltip">Bilateral is fast with good edge preservation. NLM variants are slower but may produce better results. Processing time depends on volume size.</span></span></p>
+          <div class="param-group">
+            <label class="param-label" for="denoiseMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">Bilateral: fast edge-preserving filter (~10-20x faster than NLM). NLM Fast: non-local means with reduced search window. NLM: full non-local means (slowest, highest quality).</span></span></label>
+            <select id="denoiseMethodSelect">
+              <option value="bilateral">Bilateral (fast)</option>
+              <option value="nlm-fast">NLM Fast</option>
+              <option value="nlm">NLM</option>
+            </select>
+          </div>
           <div class="step-buttons">
             <button class="btn btn-primary btn-sm" id="runDenoiseBtn" disabled>Run</button>
             <button class="btn btn-secondary btn-sm" id="skipDenoiseBtn" disabled>Skip</button>

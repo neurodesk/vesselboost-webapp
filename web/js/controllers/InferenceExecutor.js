@@ -215,11 +215,11 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'skip-bet' });
   }
 
-  async runDenoise() {
+  async runDenoise(method) {
     await this.initialize();
     this.running = true;
     this.stepStatus.denoise = 'running';
-    this.worker.postMessage({ type: 'run-denoise' });
+    this.worker.postMessage({ type: 'run-denoise', data: { method } });
   }
 
   skipDenoise() {

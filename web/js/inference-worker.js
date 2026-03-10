@@ -1244,7 +1244,7 @@ async function stepSynthStrip(params) {
   postStepComplete('bet');
 }
 
-function stepDenoise() {
+function stepDenoise(params) {
   if (!workerState.rasData) {
     throw new Error('No volume loaded. Run Load first.');
   }
@@ -1252,18 +1252,41 @@ function stepDenoise() {
     throw new Error('Preprocessing WASM not available');
   }
 
+  const method = (params && params.method) || 'bilateral';
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
-
-  postProgress(0.1, 'Denoising (NLM)...');
-  postLog('Running non-local means denoising on volume...');
 
   // Save backup for skip-undo (null if no previous denoise)
   workerState.preDenoiseData = workerState.denoisedData;
 
-  const denoised = wasm_bindgen.nlm_denoise(
-    rasData, rasDims[0], rasDims[1], rasDims[2],
-    5, 1, 0.0
-  );
+  let denoised;
+  let methodLabel;
+
+  if (method === 'bilateral') {
+    methodLabel = 'Bilateral';
+    postProgress(0.1, 'Denoising (Bilateral)...');
+    postLog('Running bilateral filter denoising on volume...');
+    denoised = wasm_bindgen.bilateral_denoise(
+      rasData, rasDims[0], rasDims[1], rasDims[2],
+      2, 1.5, 0.0
+    );
+  } else if (method === 'nlm-fast') {
+    methodLabel = 'NLM Fast';
+    postProgress(0.1, 'Denoising (NLM Fast)...');
+    postLog('Running non-local means (fast) denoising on volume...');
+    denoised = wasm_bindgen.nlm_denoise(
+      rasData, rasDims[0], rasDims[1], rasDims[2],
+      3, 1, 0.0
+    );
+  } else {
+    methodLabel = 'NLM';
+    postProgress(0.1, 'Denoising (NLM)...');
+    postLog('Running non-local means denoising on volume...');
+    denoised = wasm_bindgen.nlm_denoise(
+      rasData, rasDims[0], rasDims[1], rasDims[2],
+      5, 1, 0.0
+    );
+  }
+
   workerState.denoisedData = denoised;
   postLog('Denoising complete');
 
@@ -1273,7 +1296,7 @@ function stepDenoise() {
     rasDims,
     rasSpacing
   );
-  postStageData('nlm', nlmNifti, 'Denoising (NLM)');
+  postStageData('nlm', nlmNifti, `Denoising (${methodLabel})`);
 
   postProgress(1.0, 'Denoising complete');
   postStepComplete('denoise');
@@ -1551,7 +1574,7 @@ self.onmessage = async (e) => {
 
     case 'run-denoise':
       try {
-        stepDenoise();
+        stepDenoise(msg.data);
       } catch (error) {
         console.error('Denoise error:', error);
         postError(error?.message || String(error));
