@@ -1574,7 +1574,7 @@ self.onmessage = async (e) => {
 
     case 'run-denoise':
       try {
-        stepDenoise(msg.data);
+        stepDenoise(data);
       } catch (error) {
         console.error('Denoise error:', error);
         postError(error?.message || String(error));
