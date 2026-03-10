@@ -1154,7 +1154,7 @@ async function stepInference(params) {
   }
 
   const {
-    overlap = 0.5,
+    overlap = 0,
     threshold = 0.1,
     minComponentSize = 10,
     modelName = 'vesselboost.onnx',
