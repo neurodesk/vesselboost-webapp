@@ -885,20 +885,23 @@ class VesselBoostApp {
     const dlSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
     const viewSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
-    // Input row (always present)
+    // Input row (always present, with visibility toggle)
     const inputRow = document.createElement('div');
     inputRow.className = 'volume-toggle';
-    const inputViewBtn = document.createElement('button');
-    inputViewBtn.className = 'view-btn active';
-    inputViewBtn.title = 'View Input';
-    inputViewBtn.innerHTML = viewSvg;
-    inputViewBtn.dataset.stage = 'input';
-    inputViewBtn.addEventListener('click', () => this.viewStage('input'));
-    inputRow.appendChild(inputViewBtn);
-    const inputLabel = document.createElement('span');
-    inputLabel.className = 'stage-label';
-    inputLabel.textContent = 'Input';
+
+    const inputLabel = document.createElement('label');
+    inputLabel.className = 'viewer-checkbox';
+    const inputCb = document.createElement('input');
+    inputCb.type = 'checkbox';
+    inputCb.id = 'toggleInput';
+    inputCb.checked = !stages.includes('segmentation');
+    this._inputVisible = inputCb.checked;
+    inputLabel.appendChild(inputCb);
+    inputLabel.appendChild(document.createTextNode(' Input'));
     inputRow.appendChild(inputLabel);
+
+    inputCb.addEventListener('change', (e) => this.toggleInputVisibility(e.target.checked));
+
     container.appendChild(inputRow);
 
     // Preprocessing stages
@@ -990,6 +993,11 @@ class VesselBoostApp {
     }
   }
 
+  toggleInputVisibility(visible) {
+    this._inputVisible = visible;
+    this.viewerController.setBaseOpacity(visible ? 1 : 0);
+  }
+
   toggleOverlayVisibility(visible) {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
@@ -1013,18 +1021,22 @@ class VesselBoostApp {
     if (cancelBtn) cancelBtn.disabled = true;
     if (statusText) statusText.textContent = 'Ready';
 
-    // Show input as base with segmentation overlay
+    // Show segmentation with input hidden by default
     const fullResult = this.inferenceExecutor.getResult('segmentation');
     const overlayFile = fullResult?.file;
     if (overlayFile && this.inputFile) {
       this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'red').then(() => {
+        // Hide input volume by default - show only vessel segmentation
+        this._inputVisible = false;
+        this.viewerController.setBaseOpacity(0);
+        // Set overlay to full opacity since it's the only visible volume
+        this._overlaySliderValue = 1.0;
+        this.viewerController.setOverlayOpacity(1.0);
+        const opacitySlider = document.getElementById('overlayOpacity');
+        if (opacitySlider) opacitySlider.value = 1.0;
+        const opacityDisplay = document.getElementById('overlayOpacityValue');
+        if (opacityDisplay) opacityDisplay.textContent = '100%';
         this.syncWindowControls();
-        const container = document.getElementById('stageButtons');
-        if (container) {
-          container.querySelectorAll('.view-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.stage === 'input');
-          });
-        }
       });
     }
   }
