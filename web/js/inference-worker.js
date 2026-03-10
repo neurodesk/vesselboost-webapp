@@ -420,9 +420,9 @@ function zeroPadToPatchMultiple(data, dims, patchSize) {
 }
 
 /**
- * Crop a volume back to target dimensions (inverse of zero-padding).
+ * Remove zero-padding: crop a volume back to target dimensions.
  */
-function cropVolume(data, dims, tgtDims, OutputCtor = Uint8Array) {
+function unpadVolume(data, dims, tgtDims, OutputCtor = Uint8Array) {
   const [nx, ny, nz] = dims;
   const [tnx, tny, tnz] = tgtDims;
   const result = new OutputCtor(tnx * tny * tnz);
@@ -1311,7 +1311,7 @@ async function stepSynthStrip(params) {
   // Crop back to resampled dims (inverse of zero-padding)
   let resampledMask;
   if (prePadDims[0] !== currentDims[0] || prePadDims[1] !== currentDims[1] || prePadDims[2] !== currentDims[2]) {
-    resampledMask = cropVolume(paddedMask, currentDims, prePadDims);
+    resampledMask = unpadVolume(paddedMask, currentDims, prePadDims);
   } else {
     resampledMask = paddedMask;
   }
