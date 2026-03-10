@@ -1210,7 +1210,7 @@ async function stepSynthStrip(params) {
   const fast = !!params.fast;
   const PATCH_SIZE = 96;
   const OVERLAP = fast ? 0 : 0.5;
-  const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
+  const TARGET_SPACING = [1.0, 1.0, 1.0];
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
 
   postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
