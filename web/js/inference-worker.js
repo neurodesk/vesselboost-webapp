@@ -6,9 +6,8 @@
  *   1. Load (NIfTI parse + orient to RAS)
  *   2. N4 bias field correction (optional)
  *   3. BET brain extraction
- *   4. Slice range selection
- *   5. NLM denoising (optional)
- *   6. Inference (resample → normalize → crop → sliding window → threshold → CC → inverse)
+ *   4. NLM denoising (optional)
+ *   5. Inference (resample → normalize → crop → sliding window → threshold → CC → inverse)
  */
 
 /* global importScripts, ort, localforage, nifti, wasm_bindgen */
@@ -42,10 +41,6 @@ let workerState = {
   rasDims: null,
   rasSpacing: null,
   brainMask: null,
-  sliceStartZ: null,
-  sliceEndZ: null,
-  subsectionData: null,
-  subsectionDims: null,
   denoisedData: null
 };
 
@@ -61,10 +56,6 @@ function resetState() {
     rasDims: null,
     rasSpacing: null,
     brainMask: null,
-    sliceStartZ: null,
-    sliceEndZ: null,
-    subsectionData: null,
-    subsectionDims: null,
     denoisedData: null
   };
 }
@@ -950,10 +941,6 @@ function stepLoad(inputData) {
 
   // Clear downstream state
   workerState.brainMask = null;
-  workerState.sliceStartZ = null;
-  workerState.sliceEndZ = null;
-  workerState.subsectionData = null;
-  workerState.subsectionDims = null;
   workerState.denoisedData = null;
 
   // Post volume info for UI
@@ -1021,10 +1008,6 @@ function stepN4() {
 
   // Clear downstream state (BET + downstream invalidated)
   workerState.brainMask = null;
-  workerState.sliceStartZ = null;
-  workerState.sliceEndZ = null;
-  workerState.subsectionData = null;
-  workerState.subsectionDims = null;
   workerState.denoisedData = null;
 
   postProgress(1.0, 'N4 complete');
@@ -1083,54 +1066,21 @@ function stepBET(params) {
   postStepComplete('bet');
 }
 
-function stepSelectSlices(params) {
+function stepDenoise() {
   if (!workerState.rasData) {
     throw new Error('No volume loaded. Run Load first.');
-  }
-
-  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
-  const startZ = Math.max(0, Math.min(rasDims[2], Math.floor(params.startZ)));
-  const endZ = Math.max(startZ, Math.min(rasDims[2], Math.floor(params.endZ)));
-
-  postProgress(0.3, 'Selecting slice range...');
-  postLog(`Selecting slices z=${startZ}-${endZ - 1} (${endZ - startZ}/${rasDims[2]} slices)`);
-
-  const extracted = extractSliceRange(rasData, rasDims, startZ, endZ, Float32Array);
-  workerState.subsectionData = extracted.data;
-  workerState.subsectionDims = extracted.dims;
-  workerState.sliceStartZ = startZ;
-  workerState.sliceEndZ = endZ;
-
-  // Clear downstream
-  workerState.denoisedData = null;
-
-  const subsectionNifti = createFloat32Nifti(
-    new Float32Array(extracted.data),
-    headerBytes,
-    extracted.dims,
-    rasSpacing
-  );
-  postStageData('subsection', subsectionNifti, `Slice subsection (z=${startZ}-${endZ - 1})`);
-
-  postProgress(1.0, 'Slice selection complete');
-  postStepComplete('slices');
-}
-
-function stepDenoise() {
-  if (!workerState.subsectionData) {
-    throw new Error('No slice range selected. Run Select Slices first.');
   }
   if (!self._wasmReady) {
     throw new Error('Preprocessing WASM not available');
   }
 
-  const { subsectionData, subsectionDims, rasSpacing, headerBytes } = workerState;
+  const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
 
   postProgress(0.1, 'Denoising (NLM)...');
-  postLog('Running non-local means denoising on subsection...');
+  postLog('Running non-local means denoising on volume...');
 
   const denoised = wasm_bindgen.nlm_denoise(
-    subsectionData, subsectionDims[0], subsectionDims[1], subsectionDims[2],
+    rasData, rasDims[0], rasDims[1], rasDims[2],
     5, 1, 0.0
   );
   workerState.denoisedData = denoised;
@@ -1139,7 +1089,7 @@ function stepDenoise() {
   const nlmNifti = createFloat32Nifti(
     new Float32Array(denoised),
     headerBytes,
-    subsectionDims,
+    rasDims,
     rasSpacing
   );
   postStageData('nlm', nlmNifti, 'Denoising (NLM)');
@@ -1149,8 +1099,8 @@ function stepDenoise() {
 }
 
 async function stepInference(params) {
-  if (!workerState.subsectionData) {
-    throw new Error('No slice range selected. Run Select Slices first.');
+  if (!workerState.rasData) {
+    throw new Error('No volume loaded. Run Load first.');
   }
 
   const {
@@ -1165,13 +1115,12 @@ async function stepInference(params) {
   const [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2] = patchSize;
   const CROP_MARGIN = 20;
 
-  // Use denoised data if available, otherwise subsection data
+  // Use denoised data if available, otherwise full RAS volume data
   let currentData = workerState.denoisedData
     ? new Float32Array(workerState.denoisedData)
-    : new Float32Array(workerState.subsectionData);
-  let currentDims = [...workerState.subsectionDims];
+    : new Float32Array(workerState.rasData);
+  let currentDims = [...workerState.rasDims];
   let currentSpacing = [...workerState.rasSpacing];
-  const rasProcessingDims = [...currentDims];
 
   // Pad to multiples of patch size (matching Python: nearest-neighbor zoom)
   postProgress(0.05, 'Padding to patch grid...');
@@ -1295,18 +1244,11 @@ async function stepInference(params) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, prePadDims);
   }
 
-  // Apply brain mask (extract subset for slice range)
+  // Apply brain mask (same dimensions as rasDims, direct comparison)
   if (workerState.brainMask) {
-    const maskSubset = extractSliceRange(
-      workerState.brainMask,
-      workerState.rasDims,
-      workerState.sliceStartZ,
-      workerState.sliceEndZ,
-      Uint8Array
-    );
     let maskedOut = 0;
     for (let i = 0; i < outputLabels.length; i++) {
-      if (outputLabels[i] && !maskSubset.data[i]) {
+      if (outputLabels[i] && !workerState.brainMask[i]) {
         outputLabels[i] = 0;
         maskedOut++;
       }
@@ -1314,12 +1256,6 @@ async function stepInference(params) {
     if (maskedOut > 0) {
       postLog(`Brain mask removed ${maskedOut} vessel voxels outside brain`);
     }
-  }
-
-  // Embed subsection back into full RAS grid
-  const sliceApplied = workerState.sliceStartZ !== 0 || workerState.sliceEndZ !== workerState.rasDims[2];
-  if (sliceApplied) {
-    outputLabels = embedSliceSubsection(outputLabels, rasProcessingDims, workerState.rasDims, workerState.sliceStartZ);
   }
 
   // Inverse orient
@@ -1399,15 +1335,6 @@ self.onmessage = async (e) => {
       }
       break;
 
-    case 'select-slices':
-      try {
-        stepSelectSlices(data || {});
-      } catch (error) {
-        console.error('Slice selection error:', error);
-        postError(error?.message || String(error));
-      }
-      break;
-
     case 'run-denoise':
       try {
         stepDenoise();
@@ -1443,12 +1370,6 @@ self.onmessage = async (e) => {
         if (self._wasmReady) {
           try { stepBET({ fractionalIntensity: settings.fractionalIntensity }); } catch (e) { postLog(`Warning: BET failed: ${e.message}`); }
         }
-        const fraction = Math.max(0.01, Math.min(1, settings.sliceSubsectionFraction || 0.1));
-        const totalZ = workerState.rasDims[2];
-        const subsetNz = Math.max(1, Math.min(totalZ, Math.round(totalZ * fraction)));
-        const startZ = Math.max(0, Math.floor((totalZ - subsetNz) / 2));
-        const endZ = startZ + subsetNz;
-        stepSelectSlices({ startZ, endZ });
         if (settings.denoising && self._wasmReady) {
           try { stepDenoise(); } catch (e) { postLog(`Warning: Denoising failed: ${e.message}`); }
         }

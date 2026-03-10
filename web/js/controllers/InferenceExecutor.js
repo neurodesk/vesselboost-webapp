@@ -31,7 +31,6 @@ export class InferenceExecutor {
       load: 'pending',
       n4: 'pending',
       bet: 'pending',
-      slices: 'pending',
       denoise: 'pending',
       inference: 'pending'
     };
@@ -204,13 +203,6 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'run-bet', data: { fractionalIntensity } });
   }
 
-  async selectSlices(startZ, endZ) {
-    await this.initialize();
-    this.running = true;
-    this.stepStatus.slices = 'running';
-    this.worker.postMessage({ type: 'select-slices', data: { startZ, endZ } });
-  }
-
   async runDenoise() {
     await this.initialize();
     this.running = true;
@@ -237,7 +229,6 @@ export class InferenceExecutor {
       load: 'pending',
       n4: 'pending',
       bet: 'pending',
-      slices: 'pending',
       denoise: 'pending',
       inference: 'pending'
     };
@@ -248,7 +239,7 @@ export class InferenceExecutor {
 
   // Reset downstream steps when a step is re-run
   resetDownstream(fromStep) {
-    const steps = ['load', 'n4', 'bet', 'slices', 'denoise', 'inference'];
+    const steps = ['load', 'n4', 'bet', 'denoise', 'inference'];
     const idx = steps.indexOf(fromStep);
     if (idx < 0) return;
     for (let i = idx + 1; i < steps.length; i++) {

@@ -11,7 +11,6 @@ export const MODEL = {
 };
 
 export const INFERENCE_DEFAULTS = {
-  sliceSubsectionFraction: 0.1,
   cropForegroundMargin: 20,
   overlap: 0,
   probabilityThreshold: 0.1,
@@ -39,7 +38,6 @@ export const STAGE_NAMES = {
   'input': 'Input',
   'bet': 'Brain Extraction',
   'n4': 'Bias Correction',
-  'subsection': 'Slice Subsection',
   'nlm': 'Denoising',
   'segmentation': 'Segmentation'
 };
@@ -55,6 +53,6 @@ export const CACHE_CONFIG = {
   maxSizeMB: 500
 };
 
-export const PIPELINE_STEPS = ['load', 'n4', 'bet', 'slices', 'denoise', 'inference'];
+export const PIPELINE_STEPS = ['load', 'n4', 'bet', 'denoise', 'inference'];
 
 if (typeof self !== 'undefined') self.VesselBoostConfig = { VERSION, MODEL_BASE_URL, MODEL, INFERENCE_DEFAULTS, VIEWER_CONFIG, PROGRESS_CONFIG, STAGE_NAMES, ONNX_CONFIG, CACHE_CONFIG, PIPELINE_STEPS };

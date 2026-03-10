@@ -148,9 +148,6 @@ class VesselBoostApp {
     const runBET = document.getElementById('runBETBtn');
     if (runBET) runBET.addEventListener('click', () => this.runBET());
 
-    const previewSlices = document.getElementById('previewSlicesBtn');
-    if (previewSlices) previewSlices.addEventListener('click', () => this.previewSlices());
-
     const runDenoise = document.getElementById('runDenoiseBtn');
     if (runDenoise) runDenoise.addEventListener('click', () => this.runDenoise());
 
@@ -536,22 +533,6 @@ class VesselBoostApp {
     await this.inferenceExecutor.runBET(fi);
   }
 
-  async previewSlices() {
-    if (this.inferenceExecutor.isRunning()) return;
-    const startInput = document.getElementById('sliceStartInput');
-    const endInput = document.getElementById('sliceEndInput');
-    const startZ = startInput ? parseInt(startInput.value, 10) : 0;
-    const endZ = endInput ? parseInt(endInput.value, 10) : 0;
-    if (endZ <= startZ) {
-      this.updateOutput('Invalid slice range: end must be greater than start');
-      return;
-    }
-    this.setStepRunning('slices');
-    this.inferenceExecutor.resetDownstream('slices');
-    this.resetUIDownstream('slices');
-    await this.inferenceExecutor.selectSlices(startZ, endZ);
-  }
-
   async runDenoise() {
     if (this.inferenceExecutor.isRunning()) return;
     this.setStepRunning('denoise');
@@ -656,21 +637,6 @@ class VesselBoostApp {
     const betFiInput = document.getElementById('betFiInput');
     if (betFiInput) betFiInput.value = String(Config.INFERENCE_DEFAULTS.fractionalIntensity);
 
-    const sliceStartInput = document.getElementById('sliceStartInput');
-    if (sliceStartInput) {
-      sliceStartInput.value = '0';
-      sliceStartInput.max = '';
-    }
-
-    const sliceEndInput = document.getElementById('sliceEndInput');
-    if (sliceEndInput) {
-      sliceEndInput.value = '0';
-      sliceEndInput.max = '';
-    }
-
-    const sliceTotalDisplay = document.getElementById('sliceTotalDisplay');
-    if (sliceTotalDisplay) sliceTotalDisplay.textContent = 'of 0 slices';
-
     const overlapSelect = document.getElementById('overlapSelect');
     if (overlapSelect) overlapSelect.value = String(Config.INFERENCE_DEFAULTS.overlap);
 
@@ -759,16 +725,12 @@ class VesselBoostApp {
       case 'n4':
         this.setStepEnabled('bet', true);
         this.setStepButtonsEnabled('bet', true);
-        this.setStepEnabled('slices', true);
-        this.setStepButtonsEnabled('slices', true);
+        this.setStepEnabled('denoise', true);
+        this.setStepButtonsEnabled('denoise', true);
         break;
       case 'bet':
-        // BET doesn't gate anything - slices are already enabled from n4
-        // But ensure slices are enabled if they weren't already
-        this.setStepEnabled('slices', true);
-        this.setStepButtonsEnabled('slices', true);
-        break;
-      case 'slices':
+        // BET doesn't gate anything - denoise is already enabled from n4
+        // But ensure denoise is enabled if it wasn't already
         this.setStepEnabled('denoise', true);
         this.setStepButtonsEnabled('denoise', true);
         break;
@@ -786,27 +748,7 @@ class VesselBoostApp {
   }
 
   onVolumeInfo(info) {
-    // Populate slice range inputs with defaults (center 10%)
-    const totalSlices = info.totalSlices;
-    const subsetNz = Math.max(1, Math.round(totalSlices * 0.1));
-    const startZ = Math.max(0, Math.floor((totalSlices - subsetNz) / 2));
-    const endZ = startZ + subsetNz;
-
-    const startInput = document.getElementById('sliceStartInput');
-    const endInput = document.getElementById('sliceEndInput');
-    const totalDisplay = document.getElementById('sliceTotalDisplay');
-
-    if (startInput) {
-      startInput.value = startZ;
-      startInput.max = totalSlices;
-    }
-    if (endInput) {
-      endInput.value = endZ;
-      endInput.max = totalSlices;
-    }
-    if (totalDisplay) {
-      totalDisplay.textContent = `of ${totalSlices} slices`;
-    }
+    // Volume info received (dims, spacing, etc.)
   }
 
   updateStepBadge(step, status) {
@@ -814,7 +756,6 @@ class VesselBoostApp {
       'load': 'stepN4Badge', // load doesn't have its own badge, reusing
       'n4': 'stepN4Badge',
       'bet': 'stepBETBadge',
-      'slices': 'stepSlicesBadge',
       'denoise': 'stepDenoiseBadge',
       'inference': 'stepInferenceBadge'
     };
@@ -852,7 +793,6 @@ class VesselBoostApp {
       'load': null, // no separate section for load
       'n4': 'stepN4Section',
       'bet': 'stepBETSection',
-      'slices': 'stepSlicesSection',
       'denoise': 'stepDenoiseSection',
       'inference': 'stepInferenceSection'
     };
@@ -873,7 +813,6 @@ class VesselBoostApp {
     const buttonMap = {
       'n4': ['runN4Btn', 'skipN4Btn'],
       'bet': ['runBETBtn'],
-      'slices': ['previewSlicesBtn'],
       'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
       'inference': ['runSegmentation']
     };
@@ -887,7 +826,7 @@ class VesselBoostApp {
   }
 
   resetUIDownstream(fromStep) {
-    const steps = ['n4', 'bet', 'slices', 'denoise', 'inference'];
+    const steps = ['n4', 'bet', 'denoise', 'inference'];
     const idx = steps.indexOf(fromStep);
     if (idx < 0) return;
 
