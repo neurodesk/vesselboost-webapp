@@ -148,6 +148,9 @@ class VesselBoostApp {
     const runBET = document.getElementById('runBETBtn');
     if (runBET) runBET.addEventListener('click', () => this.runBET());
 
+    const skipBET = document.getElementById('skipBETBtn');
+    if (skipBET) skipBET.addEventListener('click', () => this.skipBET());
+
     const runDenoise = document.getElementById('runDenoiseBtn');
     if (runDenoise) runDenoise.addEventListener('click', () => this.runDenoise());
 
@@ -533,6 +536,11 @@ class VesselBoostApp {
     await this.inferenceExecutor.runBET(fi);
   }
 
+  skipBET() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.inferenceExecutor.skipBET();
+  }
+
   async runDenoise() {
     if (this.inferenceExecutor.isRunning()) return;
     this.setStepRunning('denoise');
@@ -812,7 +820,7 @@ class VesselBoostApp {
   setStepButtonsEnabled(step, enabled) {
     const buttonMap = {
       'n4': ['runN4Btn', 'skipN4Btn'],
-      'bet': ['runBETBtn'],
+      'bet': ['runBETBtn', 'skipBETBtn'],
       'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
       'inference': ['runSegmentation']
     };

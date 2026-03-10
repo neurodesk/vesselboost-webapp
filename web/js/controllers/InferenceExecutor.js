@@ -203,6 +203,11 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'run-bet', data: { fractionalIntensity } });
   }
 
+  skipBET() {
+    this.stepStatus.bet = 'skipped';
+    this.onStepComplete('bet');
+  }
+
   async runDenoise() {
     await this.initialize();
     this.running = true;
