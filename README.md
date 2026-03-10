@@ -23,8 +23,10 @@ bash run.sh
 - **Binary vessel segmentation** (vessel/background)
 - **DICOM and NIfTI** input support
 - **Interactive pipeline**: each preprocessing step (N4, BET, denoising) can be run or skipped independently
-- **Preprocessing**: N4ITK bias field correction, BET brain extraction, non-local means denoising (Rust/WASM)
+- **Preprocessing**: N4ITK bias field correction, brain extraction (SynthStrip or BET), non-local means denoising
+- **SynthStrip**: deep-learning skull-stripping that works without WASM (default)
 - **Configurable**: overlap, probability threshold, component size filtering
+- **Smart auto-contrast**: percentile-based windowing for better default display
 - **Privacy**: all processing happens locally in the browser
 
 ## Model Weights
@@ -62,7 +64,7 @@ python scripts/convert_model.py --checkpoint .tmp_weights/vesselboost_weights.pt
 
 ## Rust Preprocessing (Optional)
 
-The N4ITK bias field correction, BET brain extraction, and NLM denoising run as Rust compiled to WASM:
+The N4ITK bias field correction, BET brain extraction (traditional), and NLM denoising run as Rust compiled to WASM. SynthStrip brain extraction uses ONNX Runtime and does not require WASM.
 
 ```bash
 # Install wasm-pack
@@ -73,7 +75,7 @@ cd rust-preprocessing
 bash build.sh
 ```
 
-If not built, the app will skip preprocessing and still run inference.
+If not built, the app will skip N4/BET(traditional)/denoising preprocessing. SynthStrip brain extraction and inference will still work.
 
 ## Project Structure
 
@@ -100,7 +102,7 @@ vesselboost-webapp/
 1. Parse NIfTI / convert DICOM
 2. Orient to RAS
 3. N4ITK bias field correction (WASM, optional — run or skip)
-4. BET brain extraction (WASM, optional — run or skip)
+4. Brain extraction — SynthStrip (ONNX, default) or BET (WASM) — optional, run or skip
 5. Non-local means denoising (WASM, optional — run or skip)
 6. Pad to 64-voxel multiples (nearest-neighbor zoom matching `scipy.ndimage.zoom`)
 7. Z-score normalize
@@ -127,6 +129,7 @@ If you use VesselBoost, please cite:
 - **VesselBoost**: Xu M, Ribeiro FL, Barth M, et al. VesselBoost: A Python Toolbox for Small Blood Vessel Segmentation in Human Magnetic Resonance Angiography Data. Aperture Neuro. 2024;4. doi:10.52294/001c.123217. [GitHub](https://github.com/KMarshallX/VesselBoost/)
 - **dcm2niix**: Li X, Morgan PS, Ashburner J, Smith J, Rorden C. The first step for neuroimaging data analysis: DICOM to NIfTI conversion. J Neurosci Methods. 2016;264:47-56. [GitHub](https://github.com/rordenlab/dcm2niix)
 - **ONNX Runtime Web**: Microsoft. [onnxruntime.ai](https://onnxruntime.ai)
+- **SynthStrip**: Hoopes A, Mora JS, Dalca AV, Fischl B, Hoffmann M. SynthStrip: Skull-Stripping for Any Brain Image. NeuroImage. 2022;260:119474. doi:10.1016/j.neuroimage.2022.119474
 - **NiiVue**: NiiVue Contributors. [github.com/niivue/niivue](https://github.com/niivue/niivue)
 
 ## Privacy
