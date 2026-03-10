@@ -366,17 +366,15 @@ function padToPatchMultiple(data, dims, patchSize) {
   }
 
   // Nearest-neighbor resize matching scipy.ndimage.zoom(order=0, mode='nearest')
+  // scipy uses half-pixel center mapping: source = floor((output + 0.5) * inputSize / outputSize)
   const result = new Float32Array(nnx * nny * nnz);
-  const scaleX = nx / nnx;
-  const scaleY = ny / nny;
-  const scaleZ = nz / nnz;
 
   for (let z = 0; z < nnz; z++) {
-    const sz = Math.min(Math.floor(z * scaleZ), nz - 1);
+    const sz = Math.min(Math.max(0, Math.floor((z + 0.5) * nz / nnz)), nz - 1);
     for (let y = 0; y < nny; y++) {
-      const sy = Math.min(Math.floor(y * scaleY), ny - 1);
+      const sy = Math.min(Math.max(0, Math.floor((y + 0.5) * ny / nny)), ny - 1);
       for (let x = 0; x < nnx; x++) {
-        const sx = Math.min(Math.floor(x * scaleX), nx - 1);
+        const sx = Math.min(Math.max(0, Math.floor((x + 0.5) * nx / nnx)), nx - 1);
         result[x + y * nnx + z * nnx * nny] = data[sx + sy * nx + sz * nx * ny];
       }
     }
@@ -768,15 +766,13 @@ function resampleLabelsNearest(data, dims, tgtDims) {
   const [nx, ny, nz] = dims;
   const [tnx, tny, tnz] = tgtDims;
   const result = new Uint8Array(tnx * tny * tnz);
-  const scaleX = (nx - 1) / Math.max(tnx - 1, 1);
-  const scaleY = (ny - 1) / Math.max(tny - 1, 1);
-  const scaleZ = (nz - 1) / Math.max(tnz - 1, 1);
+  // Match scipy.ndimage.zoom(order=0): source = floor((output + 0.5) * srcSize / dstSize)
   for (let z = 0; z < tnz; z++) {
-    const sz = Math.round(z * scaleZ);
+    const sz = Math.min(Math.max(0, Math.floor((z + 0.5) * nz / tnz)), nz - 1);
     for (let y = 0; y < tny; y++) {
-      const sy = Math.round(y * scaleY);
+      const sy = Math.min(Math.max(0, Math.floor((y + 0.5) * ny / tny)), ny - 1);
       for (let x = 0; x < tnx; x++) {
-        const sx = Math.round(x * scaleX);
+        const sx = Math.min(Math.max(0, Math.floor((x + 0.5) * nx / tnx)), nx - 1);
         result[x + y*tnx + z*tnx*tny] = data[sx + sy*nx + sz*nx*ny];
       }
     }
@@ -1176,10 +1172,30 @@ async function stepInference(params) {
     const output = results[outputName].data;
     inputTensor.dispose();
 
-    if (pi === 0) postLog(`First patch output range: [${output[0].toFixed(3)}, ${output[patchVoxels-1].toFixed(3)}]`);
     const probabilities = new Float32Array(patchVoxels);
     for (let i = 0; i < patchVoxels; i++) {
       probabilities[i] = 1.0 / (1.0 + Math.exp(-output[i]));
+    }
+
+    // Log first 5 patches and any with vessels for comparison with Python
+    if (pi < 5) {
+      let pMin = Infinity, pMax = -Infinity, pMean = 0, pAbove = 0;
+      let oMin = Infinity, oMax = -Infinity;
+      let inMin = Infinity, inMax = -Infinity, inMean = 0;
+      for (let i = 0; i < patchVoxels; i++) {
+        if (probabilities[i] < pMin) pMin = probabilities[i];
+        if (probabilities[i] > pMax) pMax = probabilities[i];
+        pMean += probabilities[i];
+        if (probabilities[i] >= threshold) pAbove++;
+        if (output[i] < oMin) oMin = output[i];
+        if (output[i] > oMax) oMax = output[i];
+        if (patch[i] < inMin) inMin = patch[i];
+        if (patch[i] > inMax) inMax = patch[i];
+        inMean += patch[i];
+      }
+      pMean /= patchVoxels;
+      inMean /= patchVoxels;
+      postLog(`Patch ${pi} pos=[${pos}]: in=[${inMin.toFixed(3)},${inMax.toFixed(3)}] mean=${inMean.toFixed(3)}, logit=[${oMin.toFixed(3)},${oMax.toFixed(3)}], prob=[${pMin.toFixed(4)},${pMax.toFixed(4)}] mean=${pMean.toFixed(4)}, n>thr=${pAbove}`);
     }
 
     accumulatePatch3D(probAccum, weightAccum, currentDims, pos, probabilities, gaussianWeights, [PATCH_DIM0, PATCH_DIM1, PATCH_DIM2]);
@@ -1195,6 +1211,17 @@ async function stepInference(params) {
   postLog(`Inference complete: ${totalPatches} patches in ${totalTime}s`);
   await session.release();
 
+  // Log probability map stats for comparison with Python
+  let probMin = Infinity, probMax = -Infinity, probSum = 0, probAboveThresh = 0;
+  for (let i = 0; i < totalVoxels; i++) {
+    const p = weightAccum[i] > 0 ? probAccum[i] / weightAccum[i] : 0;
+    if (p < probMin) probMin = p;
+    if (p > probMax) probMax = p;
+    probSum += p;
+    if (p >= threshold) probAboveThresh++;
+  }
+  postLog(`Prob map (padded ${currentDims.join('x')}): range=[${probMin.toFixed(4)},${probMax.toFixed(4)}], mean=${(probSum/totalVoxels).toFixed(6)}, voxels>=${threshold}=${probAboveThresh}`);
+
   // Threshold and binarize
   postProgress(0.82, 'Thresholding...');
   postLog(`Thresholding at p=${threshold}...`);
@@ -1207,6 +1234,13 @@ async function stepInference(params) {
       }
     }
   }
+
+  // Count pre-CC voxels for diagnostic comparison
+  let preCCvoxels = 0;
+  for (let i = 0; i < totalVoxels; i++) {
+    if (binaryMask[i]) preCCvoxels++;
+  }
+  postLog(`Pre-CC vessel voxels (padded space): ${preCCvoxels}`);
 
   // Remove small connected components
   postProgress(0.86, 'Removing small components...');
