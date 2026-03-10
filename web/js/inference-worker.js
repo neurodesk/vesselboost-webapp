@@ -1085,28 +1085,30 @@ async function stepSynthStrip(params) {
   }
 
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
+  const fast = !!params.fast;
   const PATCH_SIZE = 96;
-  const OVERLAP = 0.5;
-  const TARGET_SPACING = [1.0, 1.0, 1.0];
+  const OVERLAP = fast ? 0.25 : 0.5;
+  const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
+  const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
 
-  postProgress(0.02, 'SynthStrip: resampling to 1mm...');
-  postLog('Running SynthStrip brain extraction...');
+  postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
+  postLog(`Running ${modeLabel} brain extraction...`);
 
-  // 1. Resample to 1mm isotropic
-  const needsResample = rasSpacing[0] !== 1.0 || rasSpacing[1] !== 1.0 || rasSpacing[2] !== 1.0;
+  // 1. Resample to target spacing
+  const needsResample = rasSpacing[0] !== TARGET_SPACING[0] || rasSpacing[1] !== TARGET_SPACING[1] || rasSpacing[2] !== TARGET_SPACING[2];
   let currentData, currentDims;
   if (needsResample) {
     const resampled = resampleVolume(rasData, rasDims, rasSpacing, TARGET_SPACING);
     currentData = resampled.data;
     currentDims = resampled.dims;
-    postLog(`Resampled: ${rasDims.join('x')} -> ${currentDims.join('x')} (1mm isotropic)`);
+    postLog(`Resampled: ${rasDims.join('x')} -> ${currentDims.join('x')} (${TARGET_SPACING[0]}mm isotropic)`);
   } else {
     currentData = new Float32Array(rasData);
     currentDims = [...rasDims];
   }
 
   // 2. Min-max normalize to [0,1]
-  postProgress(0.05, 'SynthStrip: normalizing...');
+  postProgress(0.05, `${modeLabel}: normalizing...`);
   let vMin = Infinity, vMax = -Infinity;
   for (let i = 0; i < currentData.length; i++) {
     if (currentData[i] < vMin) vMin = currentData[i];
@@ -1121,7 +1123,7 @@ async function stepSynthStrip(params) {
   postLog(`Normalized to [0,1]: input range [${vMin.toFixed(2)}, ${vMax.toFixed(2)}]`);
 
   // 3. Pad to patch multiples
-  postProgress(0.07, 'SynthStrip: padding...');
+  postProgress(0.07, `${modeLabel}: padding...`);
   const prePadDims = [...currentDims];
   const padded = padToPatchMultiple(currentData, currentDims, PATCH_SIZE);
   if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
@@ -1136,19 +1138,19 @@ async function stepSynthStrip(params) {
   const modelData = await fetchModel(modelUrl, 'synthstrip.onnx', 0.08, 0.20);
 
   // 5. Create ONNX session
-  postProgress(0.28, 'SynthStrip: loading model...');
-  postLog('Creating ONNX InferenceSession for SynthStrip (wasm)...');
+  postProgress(0.28, `${modeLabel}: loading model...`);
+  postLog(`Creating ONNX InferenceSession for ${modeLabel} (wasm)...`);
   const session = await ort.InferenceSession.create(modelData, {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all'
   });
-  postLog(`SynthStrip session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
+  postLog(`${modeLabel} session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
-  // 6. Sliding window inference (96x96x96, 50% overlap)
+  // 6. Sliding window inference
   const gaussianWeights = computeGaussianWeightMap3D(PATCH_SIZE, PATCH_SIZE, PATCH_SIZE, PATCH_SIZE / 8);
   const positions = computePatchPositions3D(currentDims, [PATCH_SIZE, PATCH_SIZE, PATCH_SIZE], OVERLAP);
   const totalPatches = positions.length;
-  postLog(`SynthStrip inference: ${totalPatches} patches (${PATCH_SIZE}^3), overlap=${OVERLAP}`);
+  postLog(`${modeLabel} inference: ${totalPatches} patches (${PATCH_SIZE}^3), overlap=${OVERLAP}`);
 
   const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
   const sdtAccum = new Float32Array(totalVoxels);
@@ -1172,7 +1174,7 @@ async function stepSynthStrip(params) {
 
     if ((pi + 1) % 5 === 0 || pi === totalPatches - 1) {
       const pct = ((pi + 1) / totalPatches * 100).toFixed(0);
-      postProgress(0.30 + 0.55 * (pi + 1) / totalPatches, `SynthStrip: patch ${pi + 1}/${totalPatches} (${pct}%)`);
+      postProgress(0.30 + 0.55 * (pi + 1) / totalPatches, `${modeLabel}: patch ${pi + 1}/${totalPatches} (${pct}%)`);
     }
   }
 
@@ -1186,7 +1188,7 @@ async function stepSynthStrip(params) {
   }
 
   // 7. Threshold SDT at 0 -> brain mask (SDT > 0 means inside brain)
-  postProgress(0.87, 'SynthStrip: creating brain mask...');
+  postProgress(0.87, `${modeLabel}: creating brain mask...`);
   const paddedMask = new Uint8Array(totalVoxels);
   let maskCount = 0;
   for (let i = 0; i < totalVoxels; i++) {
@@ -1205,7 +1207,7 @@ async function stepSynthStrip(params) {
   }
 
   // 8. Resample mask back to original RAS dims
-  postProgress(0.90, 'SynthStrip: resampling mask...');
+  postProgress(0.90, `${modeLabel}: resampling mask...`);
   let finalMask;
   if (needsResample) {
     finalMask = resampleLabelsNearest(resampledMask, prePadDims, rasDims);
@@ -1218,7 +1220,7 @@ async function stepSynthStrip(params) {
     if (finalMask[i]) finalCount++;
   }
   const coverage = (100 * finalCount / rasData.length).toFixed(1);
-  postLog(`SynthStrip brain mask: ${finalCount} voxels (${coverage}% coverage)`);
+  postLog(`${modeLabel} brain mask: ${finalCount} voxels (${coverage}% coverage)`);
 
   // 9. Store brain mask (save previous for skip-undo)
   workerState.preBETMask = workerState.brainMask;
@@ -1230,9 +1232,9 @@ async function stepSynthStrip(params) {
     maskedPreview[i] = finalMask[i] ? rasData[i] : 0;
   }
   const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
-  postStageData('bet', betNifti, 'SynthStrip brain extraction');
+  postStageData('bet', betNifti, `${modeLabel} brain extraction`);
 
-  postProgress(1.0, 'SynthStrip complete');
+  postProgress(1.0, `${modeLabel} complete`);
   postStepComplete('bet');
 }
 
@@ -1525,11 +1527,12 @@ self.onmessage = async (e) => {
     case 'run-bet':
       try {
         const betParams = data || {};
-        if (betParams.method === 'synthstrip') {
+        if (betParams.method === 'synthstrip' || betParams.method === 'synthstrip-fast') {
           // SynthStrip needs modelBaseUrl - derive from app version
           if (!betParams.modelBaseUrl) {
             betParams.modelBaseUrl = './models';
           }
+          betParams.fast = (betParams.method === 'synthstrip-fast');
           await stepSynthStrip(betParams);
         } else {
           stepBET(betParams);

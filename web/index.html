@@ -87,8 +87,9 @@
         <div class="section-content">
           <p class="step-description">Brain mask applied to final segmentation output. Can re-run with different settings.</p>
           <div class="param-group">
-            <label class="param-label" for="betMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">BET: traditional brain extraction (requires WASM). SynthStrip: deep-learning skull-stripping (works without WASM).</span></span></label>
+            <label class="param-label" for="betMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">SynthStrip Fast: coarser resolution (2mm) for quick brain extraction. SynthStrip: full resolution (1mm) for precise extraction. BET: traditional brain extraction (requires WASM).</span></span></label>
             <select id="betMethodSelect">
+              <option value="synthstrip-fast">SynthStrip Fast</option>
               <option value="synthstrip">SynthStrip</option>
               <option value="bet">BET (traditional)</option>
             </select>
@@ -128,6 +129,15 @@
           <span class="step-badge" id="stepInferenceBadge"></span>
         </h2>
         <div class="section-content">
+          <div class="param-group">
+            <label class="param-label" for="modelSelect">Model <span class="info-icon">i<span class="info-tooltip">Select the VesselBoost model variant. Default is recommended for TOF MRA. Boosted models have higher sensitivity. T2*/SWI is for T2*-weighted or susceptibility-weighted data.</span></span></label>
+            <select id="modelSelect">
+              <option value="manual" selected>Default (TOF MRA)</option>
+              <option value="omelette1">Boosted (Sensitive)</option>
+              <option value="omelette2">Boosted (Moderate)</option>
+              <option value="t2s">T2* / SWI</option>
+            </select>
+          </div>
           <div class="param-group">
             <label class="param-label" for="overlapSelect">Sliding Window Overlap <span class="info-icon">i<span class="info-tooltip">Higher overlap improves segmentation quality but takes longer. 50% is fast, 90% produces the highest quality.</span></span></label>
             <select id="overlapSelect">

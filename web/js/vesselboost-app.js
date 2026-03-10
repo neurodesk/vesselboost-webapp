@@ -158,7 +158,7 @@ class VesselBoostApp {
       betMethodSelect.addEventListener('change', () => {
         const fiGroup = document.getElementById('betFiGroup');
         if (fiGroup) {
-          fiGroup.style.display = betMethodSelect.value === 'synthstrip' ? 'none' : '';
+          fiGroup.style.display = betMethodSelect.value.startsWith('synthstrip') ? 'none' : '';
         }
       });
     }
@@ -618,6 +618,11 @@ class VesselBoostApp {
     const minSizeInput = document.getElementById('minSizeInput');
     const minComponentSize = minSizeInput ? parseInt(minSizeInput.value, 10) : Config.INFERENCE_DEFAULTS.minComponentSize;
 
+    // Get selected model from dropdown
+    const modelSelect = document.getElementById('modelSelect');
+    const selectedModelId = modelSelect ? modelSelect.value : 'manual';
+    const selectedModel = Config.MODELS.find(m => m.id === selectedModelId) || Config.MODELS[0];
+
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
 
     const cancelBtn = document.getElementById('cancelButton');
@@ -632,8 +637,8 @@ class VesselBoostApp {
       overlap,
       threshold,
       minComponentSize,
-      modelName: Config.MODEL.name,
-      patchSize: Config.MODEL.patchSize,
+      modelName: selectedModel.name,
+      patchSize: selectedModel.patchSize,
       modelBaseUrl
     });
   }
@@ -697,7 +702,7 @@ class VesselBoostApp {
     // Reset BET method to SynthStrip (default)
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
-      betMethodSelect.value = 'synthstrip';
+      betMethodSelect.value = 'synthstrip-fast';
       const fiGroup = document.getElementById('betFiGroup');
       if (fiGroup) fiGroup.style.display = 'none';
     }
@@ -1076,7 +1081,7 @@ class VesselBoostApp {
     // If WASM preprocessing not available, auto-select SynthStrip and disable BET option
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect && !this.inferenceExecutor.wasmAvailable) {
-      betMethodSelect.value = 'synthstrip';
+      betMethodSelect.value = 'synthstrip-fast';
       // Disable the BET option
       const betOption = betMethodSelect.querySelector('option[value="bet"]');
       if (betOption) betOption.disabled = true;
