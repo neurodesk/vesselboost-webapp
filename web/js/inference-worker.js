@@ -1273,25 +1273,14 @@ async function stepSynthStrip(params) {
   const modelUrl = `${modelBaseUrl}/synthstrip.onnx`;
   const modelData = await fetchModel(modelUrl, 'synthstrip.onnx', 0.08, 0.20);
 
-  // 5. Create ONNX session (prefer WebGPU, fall back to WASM)
+  // 5. Create ONNX session (WASM — WebGPU lacks 3D pooling support)
   postProgress(0.28, `${modeLabel}: loading model...`);
-  let session;
-  try {
-    postLog(`Creating ONNX InferenceSession for ${modeLabel} (trying webgpu)...`);
-    session = await ort.InferenceSession.create(modelData, {
-      executionProviders: ['webgpu'],
-      graphOptimizationLevel: 'all'
-    });
-    postLog(`${modeLabel} session created with WebGPU.`);
-  } catch (_gpuErr) {
-    postLog(`WebGPU not available, falling back to WASM.`);
-    session = await ort.InferenceSession.create(modelData, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all'
-    });
-    postLog(`${modeLabel} session created with WASM.`);
-  }
-  postLog(`Input: ${session.inputNames}, Output: ${session.outputNames}`);
+  postLog(`Creating ONNX InferenceSession for ${modeLabel} (wasm)...`);
+  const session = await ort.InferenceSession.create(modelData, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all'
+  });
+  postLog(`${modeLabel} session created. Input: ${session.inputNames}, Output: ${session.outputNames}`);
 
   // 6. Sliding window inference
   const useGaussian = OVERLAP > 0;
