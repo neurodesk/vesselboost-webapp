@@ -17,8 +17,12 @@ Reference:
     Hoopes A, Mora JS, Dalca AV, Fischl B, Hoffmann M.
     SynthStrip: Skull-Stripping for Any Brain Image. NeuroImage. 2022;260:119474.
 
-Architecture source:
-    https://github.com/freesurfer/freesurfer (mri_synthstrip)
+Architecture:
+    VoxelMorph-style 3D UNet (no BatchNorm). 6 encoder levels with features
+    capped at max_features=64, 6 decoder levels with skip-size-targeted
+    upsampling, plus "remaining" output layers.
+    State dict keys: encoder.{0-5}.{0,1}.conv, decoder.{0-5}.{0,1}.conv,
+    remaining.{0,1,2}.conv.
 """
 
 import sys
@@ -27,87 +31,139 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-# ==================== SynthStrip 3D UNet Architecture ====================
-# 7-level 3D UNet matching FreeSurfer's SynthStrip implementation.
-# Input: [B, 1, D, H, W] normalized to [0,1]
-# Output: [B, 1, D, H, W] signed distance transform
+# ==================== SynthStrip Architecture (VoxelMorph UNet) ====================
+# Matches the checkpoint state dict keys exactly:
+#   encoder.{level}.{0,1}.conv.{weight,bias}
+#   decoder.{level}.{0,1}.conv.{weight,bias}
+#   remaining.{0,1,2}.conv.{weight,bias}
 
 
-class ConvBlock(nn.Module):
-    """Two consecutive 3D conv-batchnorm-leakyrelu blocks."""
-    def __init__(self, in_channels, out_channels):
+class ConvLayer(nn.Module):
+    """Single 3D conv + LeakyReLU (no BatchNorm)."""
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm3d(out_channels)
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm3d(out_channels)
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, padding=padding)
         self.activation = nn.LeakyReLU(0.2)
 
     def forward(self, x):
-        x = self.activation(self.bn1(self.conv1(x)))
-        x = self.activation(self.bn2(self.conv2(x)))
-        return x
+        return self.activation(self.conv(x))
+
+
+class ConvLayerNoActivation(nn.Module):
+    """Single 3D conv without activation (for final output)."""
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
+        super().__init__()
+        self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, padding=padding)
+
+    def forward(self, x):
+        return self.conv(x)
 
 
 class SynthStripUNet(nn.Module):
     """
-    7-level 3D UNet for SynthStrip skull-stripping.
+    VoxelMorph-style 3D UNet for SynthStrip skull-stripping.
 
-    Encoder: 7 levels with max-pooling (min input: 2^6 = 64)
-    Decoder: 7 levels with trilinear upsampling + skip connections
-    Output: signed distance transform (1 channel)
+    Architecture (from checkpoint weights):
+      - encoder: 6 levels, features [16, 32, 64, 64, 64, 64], 2 convs each + maxpool
+      - decoder.0: bottleneck (64ch in, no skip concat), 2 convs
+      - decoder.1-5: upsample-to-skip-size + skip concat + 2 convs
+      - remaining: upsample-to-skip-size + skip concat (48ch) + 3 convs -> 1ch SDT output
+
+    Input:  [B, 1, D, H, W] normalized to [0, 1]
+    Output: [B, 1, D, H, W] signed distance transform
     """
-    def __init__(self, in_channels=1, out_channels=1, nb_features=16, nb_levels=7, feat_mult=2):
+    def __init__(self, in_channels=1, out_channels=1, nb_features=16,
+                 nb_levels=7, feat_mult=2, max_features=64):
         super().__init__()
 
-        # Compute feature counts per level
-        enc_features = [nb_features * (feat_mult ** i) for i in range(nb_levels)]
-        dec_features = enc_features[::-1]
+        # Encoder feature counts: [16, 32, 64, 64, 64, 64] (6 levels, capped at 64)
+        num_enc_levels = nb_levels - 1  # 6
+        enc_features = []
+        for i in range(num_enc_levels):
+            nf = min(nb_features * (feat_mult ** i), max_features)
+            enc_features.append(nf)
 
-        # Encoder
-        self.encoders = nn.ModuleList()
-        self.pools = nn.ModuleList()
-        prev_channels = in_channels
+        # Encoder: 6 levels, each with 2 conv layers + maxpool
+        self.encoder = nn.ModuleList()
+        prev_ch = in_channels
         for nf in enc_features:
-            self.encoders.append(ConvBlock(prev_channels, nf))
-            self.pools.append(nn.MaxPool3d(2))
-            prev_channels = nf
+            level = nn.ModuleList([
+                ConvLayer(prev_ch, nf),
+                ConvLayer(nf, nf),
+            ])
+            self.encoder.append(level)
+            prev_ch = nf
 
-        # Bottleneck
-        self.bottleneck = ConvBlock(enc_features[-1], enc_features[-1])
+        self.pools = nn.ModuleList([nn.MaxPool3d(2) for _ in range(num_enc_levels)])
 
-        # Decoder
-        self.upsamplers = nn.ModuleList()
-        self.decoders = nn.ModuleList()
-        prev_channels = enc_features[-1]
-        for i, nf in enumerate(dec_features):
-            self.upsamplers.append(nn.Upsample(scale_factor=2, mode='trilinear', align_corners=True))
-            self.decoders.append(ConvBlock(prev_channels + nf, nf))
-            prev_channels = nf
+        # Decoder: 6 levels
+        self.decoder = nn.ModuleList()
 
-        # Output
-        self.output_conv = nn.Conv3d(dec_features[-1], out_channels, kernel_size=1)
+        # Level 0: bottleneck - takes encoder.5 pooled output (64ch), no skip concat
+        self.decoder.append(nn.ModuleList([
+            ConvLayer(enc_features[-1], enc_features[-1]),
+            ConvLayer(enc_features[-1], enc_features[-1]),
+        ]))
+
+        # Levels 1-5: upsample-to-skip-size + skip concat
+        # decoder.1: up(64) + skip_enc5(64) = 128 -> 64
+        # decoder.2: up(64) + skip_enc4(64) = 128 -> 64
+        # decoder.3: up(64) + skip_enc3(64) = 128 -> 64
+        # decoder.4: up(64) + skip_enc2(64) = 128 -> 64
+        # decoder.5: up(64) + skip_enc1(32) = 96 -> 32
+        prev_dec = enc_features[-1]  # 64
+        for i in range(1, num_enc_levels):
+            skip_ch = enc_features[num_enc_levels - i]
+            in_ch = prev_dec + skip_ch
+            out_ch = skip_ch if i == num_enc_levels - 1 else enc_features[-1]
+            self.decoder.append(nn.ModuleList([
+                ConvLayer(in_ch, out_ch),
+                ConvLayer(out_ch, out_ch),
+            ]))
+            prev_dec = out_ch
+
+        # Remaining: upsample decoder.5 (32ch) + skip_enc0 (16ch) = 48ch -> 16 -> 16 -> 1
+        last_dec_ch = 32
+        skip0_ch = enc_features[0]  # 16
+        remaining_in = last_dec_ch + skip0_ch  # 48
+        self.remaining = nn.ModuleList([
+            ConvLayer(remaining_in, nb_features),
+            ConvLayer(nb_features, nb_features),
+            ConvLayerNoActivation(nb_features, out_channels),
+        ])
 
     def forward(self, x):
         # Encoder
-        skip_connections = []
-        for encoder, pool in zip(self.encoders, self.pools):
-            x = encoder(x)
-            skip_connections.append(x)
+        skips = []
+        for enc_level, pool in zip(self.encoder, self.pools):
+            for conv in enc_level:
+                x = conv(x)
+            skips.append(x)
             x = pool(x)
 
-        # Bottleneck
-        x = self.bottleneck(x)
+        # Decoder level 0: bottleneck (no skip concat)
+        for conv in self.decoder[0]:
+            x = conv(x)
 
-        # Decoder
-        for upsampler, decoder, skip in zip(self.upsamplers, self.decoders, reversed(skip_connections)):
-            x = upsampler(x)
+        # Decoder levels 1-5: upsample to skip spatial size + concat
+        for i in range(1, len(self.decoder)):
+            skip = skips[len(skips) - i]
+            x = F.interpolate(x, size=skip.shape[2:], mode='nearest')
             x = torch.cat([x, skip], dim=1)
-            x = decoder(x)
+            for conv in self.decoder[i]:
+                x = conv(x)
 
-        return self.output_conv(x)
+        # Remaining: upsample to skip0 size + concat + 3 convs
+        skip0 = skips[0]
+        x = F.interpolate(x, size=skip0.shape[2:], mode='nearest')
+        x = torch.cat([x, skip0], dim=1)
+        for conv in self.remaining:
+            x = conv(x)
+
+        return x
 
 
 # ==================== Configuration ====================
@@ -125,7 +181,8 @@ def load_model(checkpoint_path):
         out_channels=1,
         nb_features=16,
         nb_levels=7,
-        feat_mult=2
+        feat_mult=2,
+        max_features=64
     )
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -142,8 +199,12 @@ def load_model(checkpoint_path):
     return model
 
 
-def export_to_onnx(model, output_path, patch_size=96, opset_version=17):
-    """Export model to ONNX format."""
+def export_to_onnx(model, output_path, patch_size=64, opset_version=17):
+    """Export model to ONNX format.
+
+    Uses 64^3 dummy input for export (smaller memory footprint) with dynamic
+    spatial axes, so the model accepts any input size at runtime (e.g. 96^3).
+    """
     dummy_input = torch.randn(1, 1, patch_size, patch_size, patch_size)
 
     torch.onnx.export(
@@ -154,8 +215,8 @@ def export_to_onnx(model, output_path, patch_size=96, opset_version=17):
         input_names=["input"],
         output_names=["output"],
         dynamic_axes={
-            "input": {0: "batch"},
-            "output": {0: "batch"},
+            "input": {0: "batch", 2: "depth", 3: "height", 4: "width"},
+            "output": {0: "batch", 2: "depth", 3: "height", 4: "width"},
         },
         dynamo=False,
     )
@@ -217,7 +278,7 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Path to SynthStrip .pt checkpoint (e.g. synthstrip.1.pt)")
     parser.add_argument("--output", default=None, help="Output ONNX path (default: web/models/synthstrip.onnx)")
     parser.add_argument("--quantize", action="store_true", help="Apply UINT8 dynamic quantization")
-    parser.add_argument("--patch-size", type=int, default=96, help="Patch size for export (default: 96)")
+    parser.add_argument("--patch-size", type=int, default=64, help="Patch size for ONNX export dummy input (default: 64). Model accepts any size at runtime.")
     args = parser.parse_args()
 
     if not os.path.exists(args.checkpoint):
@@ -230,7 +291,7 @@ def main():
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Output: {output_path}")
     print(f"Quantize: {args.quantize}")
-    print(f"Architecture: SynthStrip 7-level 3D UNet, features=16, patch_size={args.patch_size}")
+    print(f"Architecture: SynthStrip VoxelMorph 3D UNet, features=16, max=64, patch_size={args.patch_size}")
 
     print("\nLoading PyTorch model...")
     model = load_model(args.checkpoint)
