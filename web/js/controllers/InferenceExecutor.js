@@ -129,7 +129,10 @@ export class InferenceExecutor {
   }
 
   _handleStepComplete(step) {
-    this.stepStatus[step] = 'complete';
+    // Preserve 'skipped' status if already set by skip method
+    if (this.stepStatus[step] !== 'skipped') {
+      this.stepStatus[step] = 'complete';
+    }
     this.running = false;
     this.onStepComplete(step);
   }
@@ -195,7 +198,8 @@ export class InferenceExecutor {
 
   skipN4() {
     this.stepStatus.n4 = 'skipped';
-    this.onStepComplete('n4');
+    this.running = true;
+    this.worker.postMessage({ type: 'skip-n4' });
   }
 
   async runBET(fractionalIntensity, method = 'bet', modelBaseUrl) {
@@ -207,7 +211,8 @@ export class InferenceExecutor {
 
   skipBET() {
     this.stepStatus.bet = 'skipped';
-    this.onStepComplete('bet');
+    this.running = true;
+    this.worker.postMessage({ type: 'skip-bet' });
   }
 
   async runDenoise() {
@@ -219,7 +224,8 @@ export class InferenceExecutor {
 
   skipDenoise() {
     this.stepStatus.denoise = 'skipped';
-    this.onStepComplete('denoise');
+    this.running = true;
+    this.worker.postMessage({ type: 'skip-denoise' });
   }
 
   async runInference(settings) {
@@ -294,6 +300,11 @@ export class InferenceExecutor {
     this.running = false;
     this.setProgress(0, 'Cancelled');
     this.updateOutput('Cancelled. Worker will be reinitialized on next action.');
+  }
+
+  removeResult(stage) {
+    delete this.results[stage];
+    this.stageOrder = this.stageOrder.filter(s => s !== stage);
   }
 
   clearResults() {

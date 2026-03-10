@@ -542,9 +542,17 @@ class VesselBoostApp {
     await this.inferenceExecutor.runN4();
   }
 
-  skipN4() {
+  async skipN4() {
     if (this.inferenceExecutor.isRunning()) return;
+    // Remove N4 result and restore viewer to input
+    this.inferenceExecutor.removeResult('n4');
     this.inferenceExecutor.skipN4();
+    if (this.inputFile) {
+      await this.viewerController.loadBaseVolume(this.inputFile);
+      this.applyDefaultBaseColormap();
+      this.syncWindowControls();
+      this.applyAutoContrast();
+    }
   }
 
   async runBET() {
@@ -558,9 +566,20 @@ class VesselBoostApp {
     await this.inferenceExecutor.runBET(fi, method, modelBaseUrl);
   }
 
-  skipBET() {
+  async skipBET() {
     if (this.inferenceExecutor.isRunning()) return;
+    // Remove BET result and restore viewer to current base volume
+    this.inferenceExecutor.removeResult('bet');
     this.inferenceExecutor.skipBET();
+    // Reload the latest preprocessing base (N4 if available, else input)
+    const n4Result = this.inferenceExecutor.getResult('n4');
+    const baseFile = n4Result?.file || this.inputFile;
+    if (baseFile) {
+      await this.viewerController.loadBaseVolume(baseFile);
+      this.applyDefaultBaseColormap();
+      this.syncWindowControls();
+      this.applyAutoContrast();
+    }
   }
 
   async runDenoise() {
@@ -571,9 +590,20 @@ class VesselBoostApp {
     await this.inferenceExecutor.runDenoise();
   }
 
-  skipDenoise() {
+  async skipDenoise() {
     if (this.inferenceExecutor.isRunning()) return;
+    // Remove denoise result and restore viewer
+    this.inferenceExecutor.removeResult('nlm');
     this.inferenceExecutor.skipDenoise();
+    // Reload the latest preprocessing base
+    const n4Result = this.inferenceExecutor.getResult('n4');
+    const baseFile = n4Result?.file || this.inputFile;
+    if (baseFile) {
+      await this.viewerController.loadBaseVolume(baseFile);
+      this.applyDefaultBaseColormap();
+      this.syncWindowControls();
+      this.applyAutoContrast();
+    }
   }
 
   async runSegmentation() {

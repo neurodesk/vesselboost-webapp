@@ -67,7 +67,9 @@ pub fn n4_bias_correct_impl(
     // Bias field estimate (in log space)
     let mut bias_field = vec![0.0f32; sn];
 
-    // Iterative correction
+    // Iterative correction with damped updates to prevent over-correction.
+    // Relaxation factor < 1 ensures the bias estimate converges gradually.
+    let relaxation = 0.5f32;
     let mut prev_metric = f32::MAX;
 
     for _iter in 0..max_iterations {
@@ -106,10 +108,10 @@ pub fn n4_bias_correct_impl(
             })
             .collect();
 
-        // Update bias field with residual (already smooth — derived from smooth_3d)
+        // Damped update: only apply a fraction of the residual per iteration
         for i in 0..sn {
             if shrunken_mask[i] {
-                bias_field[i] += residual[i];
+                bias_field[i] += relaxation * residual[i];
             }
         }
 
@@ -125,6 +127,14 @@ pub fn n4_bias_correct_impl(
             break;
         }
         prev_metric = metric;
+    }
+
+    // Clamp bias field to prevent extreme corrections.
+    // ±0.5 in log-space corresponds to correction factors of ~0.6x to ~1.65x.
+    for i in 0..sn {
+        if shrunken_mask[i] {
+            bias_field[i] = bias_field[i].clamp(-0.5, 0.5);
+        }
     }
 
     // Upsample bias field to original resolution
@@ -186,11 +196,12 @@ fn smooth_3d(data: &[f32], dims: [usize; 3], mask: &[bool]) -> Vec<f32> {
     let mut current = data.to_vec();
     let mut temp = vec![0.0f32; n];
 
-    // Radius 4 box filter, 6 iterations along each axis.
-    // Effective Gaussian sigma ≈ radius * sqrt(iters/3) ≈ 4 * sqrt(2) ≈ 5.7
-    // voxels in shrunken space (shrink_factor=4 → ~23 voxels original → ~7mm).
-    let radius: usize = 4;
-    let iterations = 6;
+    // Radius 8 box filter, 8 iterations along each axis.
+    // Effective Gaussian sigma ≈ radius * sqrt(iters/3) ≈ 8 * sqrt(8/3) ≈ 13
+    // voxels in shrunken space (shrink_factor=4 → ~52 voxels original → ~52mm).
+    // Large smoothing isolates true bias field from anatomical structure.
+    let radius: usize = 8;
+    let iterations = 8;
 
     for _ in 0..iterations {
         // Pass along X

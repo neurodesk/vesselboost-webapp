@@ -42,7 +42,11 @@ let workerState = {
   rasDims: null,
   rasSpacing: null,
   brainMask: null,
-  denoisedData: null
+  denoisedData: null,
+  // Backups for skip-undo
+  preN4Data: null,
+  preBETMask: null,
+  preDenoiseData: null
 };
 
 function resetState() {
@@ -58,7 +62,10 @@ function resetState() {
     rasDims: null,
     rasSpacing: null,
     brainMask: null,
-    denoisedData: null
+    denoisedData: null,
+    preN4Data: null,
+    preBETMask: null,
+    preDenoiseData: null
   };
 }
 
@@ -985,6 +992,9 @@ function stepN4() {
   }
   postLog(`N4 input stats: min=${inMin.toFixed(2)}, max=${inMax.toFixed(2)}, mean_nz=${inNonzero ? (inSum/inNonzero).toFixed(2) : 'N/A'}, nonzero=${inNonzero}/${rasData.length}`);
 
+  // Save backup for skip-undo
+  workerState.preN4Data = new Float32Array(rasData);
+
   const corrected = wasm_bindgen.n4_bias_correct(
     rasData, rasDims[0], rasDims[1], rasDims[2],
     rasSpacing[0], rasSpacing[1], rasSpacing[2],
@@ -1051,6 +1061,8 @@ function stepBET(params) {
   const coverage = (100 * maskCount / rasData.length).toFixed(1);
   postLog(`Brain mask: ${maskCount} voxels (${coverage}% coverage)`);
 
+  // Save previous mask for skip-undo (null if no previous mask)
+  workerState.preBETMask = workerState.brainMask;
   workerState.brainMask = brainMask;
 
   // BET does NOT modify rasData or invalidate downstream - mask is independent
@@ -1208,7 +1220,8 @@ async function stepSynthStrip(params) {
   const coverage = (100 * finalCount / rasData.length).toFixed(1);
   postLog(`SynthStrip brain mask: ${finalCount} voxels (${coverage}% coverage)`);
 
-  // 9. Store brain mask
+  // 9. Store brain mask (save previous for skip-undo)
+  workerState.preBETMask = workerState.brainMask;
   workerState.brainMask = finalMask;
 
   // 10. Post masked preview
@@ -1235,6 +1248,9 @@ function stepDenoise() {
 
   postProgress(0.1, 'Denoising (NLM)...');
   postLog('Running non-local means denoising on volume...');
+
+  // Save backup for skip-undo (null if no previous denoise)
+  workerState.preDenoiseData = workerState.denoisedData;
 
   const denoised = wasm_bindgen.nlm_denoise(
     rasData, rasDims[0], rasDims[1], rasDims[2],
@@ -1531,6 +1547,33 @@ self.onmessage = async (e) => {
         console.error('Denoise error:', error);
         postError(error?.message || String(error));
       }
+      break;
+
+    case 'skip-n4':
+      if (workerState.preN4Data) {
+        workerState.rasData = workerState.preN4Data;
+        workerState.preN4Data = null;
+        workerState.brainMask = null;
+        workerState.denoisedData = null;
+        postLog('N4 undone — reverted to original data');
+      } else {
+        postLog('N4 skipped');
+      }
+      postStepComplete('n4');
+      break;
+
+    case 'skip-bet':
+      workerState.brainMask = workerState.preBETMask || null;
+      workerState.preBETMask = null;
+      postLog(workerState.brainMask ? 'BET undone — reverted to previous mask' : 'BET skipped — no brain mask');
+      postStepComplete('bet');
+      break;
+
+    case 'skip-denoise':
+      workerState.denoisedData = workerState.preDenoiseData || null;
+      workerState.preDenoiseData = null;
+      postLog(workerState.denoisedData ? 'Denoising undone — reverted to previous data' : 'Denoising skipped');
+      postStepComplete('denoise');
       break;
 
     case 'run-inference':
