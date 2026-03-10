@@ -957,7 +957,7 @@ function stepN4() {
   const corrected = wasm_bindgen.n4_bias_correct(
     rasData, rasDims[0], rasDims[1], rasDims[2],
     rasSpacing[0], rasSpacing[1], rasSpacing[2],
-    4, 50, 0.001
+    4, 10, 0.005
   );
 
   // Log output stats

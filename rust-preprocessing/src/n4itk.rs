@@ -175,15 +175,25 @@ fn masked_variance(data: &[f32], mask: &[bool]) -> f32 {
     std * std
 }
 
-/// Simple 3D Gaussian-like smoothing using iterative box filter.
+/// Separable 3D smoothing for bias field estimation.
+///
+/// Uses repeated 1D box-filter passes along each axis for efficiency.
+/// The large radius and many iterations produce a very smooth output
+/// that captures only the low-frequency bias field, not anatomical detail.
 fn smooth_3d(data: &[f32], dims: [usize; 3], mask: &[bool]) -> Vec<f32> {
     let [nx, ny, nz] = dims;
     let n = nx * ny * nz;
     let mut current = data.to_vec();
     let mut temp = vec![0.0f32; n];
 
-    // 3 iterations of 3x3x3 box filter approximates Gaussian
-    for _ in 0..3 {
+    // Radius 4 box filter, 6 iterations along each axis.
+    // Effective Gaussian sigma ≈ radius * sqrt(iters/3) ≈ 4 * sqrt(2) ≈ 5.7
+    // voxels in shrunken space (shrink_factor=4 → ~23 voxels original → ~7mm).
+    let radius: usize = 4;
+    let iterations = 6;
+
+    for _ in 0..iterations {
+        // Pass along X
         for z in 0..nz {
             for y in 0..ny {
                 for x in 0..nx {
@@ -192,29 +202,60 @@ fn smooth_3d(data: &[f32], dims: [usize; 3], mask: &[bool]) -> Vec<f32> {
                         temp[idx] = 0.0;
                         continue;
                     }
-
                     let mut sum = 0.0f32;
                     let mut count = 0u32;
-
-                    let x_start = if x > 0 { x - 1 } else { 0 };
-                    let x_end = (x + 2).min(nx);
-                    let y_start = if y > 0 { y - 1 } else { 0 };
-                    let y_end = (y + 2).min(ny);
-                    let z_start = if z > 0 { z - 1 } else { 0 };
-                    let z_end = (z + 2).min(nz);
-
-                    for nz2 in z_start..z_end {
-                        for ny2 in y_start..y_end {
-                            for nx2 in x_start..x_end {
-                                let nidx = utils::idx3(nx2, ny2, nz2, nx, ny);
-                                if mask[nidx] {
-                                    sum += current[nidx];
-                                    count += 1;
-                                }
-                            }
-                        }
+                    let x0 = x.saturating_sub(radius);
+                    let x1 = (x + radius + 1).min(nx);
+                    for xi in x0..x1 {
+                        let ni = utils::idx3(xi, y, z, nx, ny);
+                        if mask[ni] { sum += current[ni]; count += 1; }
                     }
+                    temp[idx] = if count > 0 { sum / count as f32 } else { 0.0 };
+                }
+            }
+        }
+        std::mem::swap(&mut current, &mut temp);
 
+        // Pass along Y
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    let idx = utils::idx3(x, y, z, nx, ny);
+                    if !mask[idx] {
+                        temp[idx] = 0.0;
+                        continue;
+                    }
+                    let mut sum = 0.0f32;
+                    let mut count = 0u32;
+                    let y0 = y.saturating_sub(radius);
+                    let y1 = (y + radius + 1).min(ny);
+                    for yi in y0..y1 {
+                        let ni = utils::idx3(x, yi, z, nx, ny);
+                        if mask[ni] { sum += current[ni]; count += 1; }
+                    }
+                    temp[idx] = if count > 0 { sum / count as f32 } else { 0.0 };
+                }
+            }
+        }
+        std::mem::swap(&mut current, &mut temp);
+
+        // Pass along Z
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    let idx = utils::idx3(x, y, z, nx, ny);
+                    if !mask[idx] {
+                        temp[idx] = 0.0;
+                        continue;
+                    }
+                    let mut sum = 0.0f32;
+                    let mut count = 0u32;
+                    let z0 = z.saturating_sub(radius);
+                    let z1 = (z + radius + 1).min(nz);
+                    for zi in z0..z1 {
+                        let ni = utils::idx3(x, y, zi, nx, ny);
+                        if mask[ni] { sum += current[ni]; count += 1; }
+                    }
                     temp[idx] = if count > 0 { sum / count as f32 } else { 0.0 };
                 }
             }
