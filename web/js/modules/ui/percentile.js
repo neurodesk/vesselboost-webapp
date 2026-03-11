@@ -1,38 +1,65 @@
 /**
  * Auto-contrast windowing for MRA volumes.
- * Uses mean ± k*std of non-zero voxels, which handles the
- * heavily skewed intensity distribution of angiography data
- * better than fixed percentiles.
+ * Uses histogram-based percentiles of non-background voxels,
+ * which is robust to the heavily skewed intensity distribution
+ * of angiography data and numerically stable for large volumes.
  */
 
 /**
- * Compute auto-contrast window using mean/std of non-zero voxels.
+ * Compute auto-contrast window using histogram-based percentiles.
  *
  * @param {TypedArray} img - Volume image data
- * @param {number} [globalMin] - Data minimum (clamps lower bound)
  * @returns {{ low: number, high: number }}
  */
-export function computeAutoWindow(img, globalMin) {
-  let sum = 0;
-  let sumSq = 0;
-  let count = 0;
+export function computeAutoWindow(img) {
+  const THRESHOLD = 1e-6;
+  const LOW_PCT = 0.02;
+  const HIGH_PCT = 0.998;
+  const N_BINS = 1024;
+
+  // Pass 1: find data range of non-background voxels
+  let min = Infinity;
+  let max = -Infinity;
+  let nonZeroCount = 0;
 
   for (let i = 0; i < img.length; i++) {
     const v = img[i];
-    if (v === 0) continue;
-    sum += v;
-    sumSq += v * v;
-    count++;
+    if (Math.abs(v) <= THRESHOLD) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+    nonZeroCount++;
   }
 
-  if (count === 0) return { low: 0, high: 1 };
+  if (nonZeroCount === 0) return { low: 0, high: 1 };
+  if (max <= min) return { low: min, high: min + 1 };
 
-  const mean = sum / count;
-  const variance = sumSq / count - mean * mean;
-  const std = Math.sqrt(Math.max(0, variance));
+  // Pass 2: build histogram
+  const bins = new Uint32Array(N_BINS);
+  const scale = (N_BINS - 1) / (max - min);
 
-  const low = Math.max(globalMin ?? 0, mean - 0.5 * std);
-  const high = mean + 2 * std;
+  for (let i = 0; i < img.length; i++) {
+    const v = img[i];
+    if (Math.abs(v) <= THRESHOLD) continue;
+    bins[Math.round((v - min) * scale)]++;
+  }
+
+  // Compute percentiles from cumulative histogram
+  const lowTarget = Math.floor(nonZeroCount * LOW_PCT);
+  const highTarget = Math.floor(nonZeroCount * HIGH_PCT);
+  let cumulative = 0;
+  let low = min;
+  let high = max;
+
+  for (let i = 0; i < N_BINS; i++) {
+    cumulative += bins[i];
+    if (low === min && cumulative >= lowTarget) {
+      low = min + i / scale;
+    }
+    if (cumulative >= highTarget) {
+      high = min + i / scale;
+      break;
+    }
+  }
 
   return { low, high };
 }
