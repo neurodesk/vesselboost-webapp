@@ -810,9 +810,27 @@ class VesselBoostApp {
         this.setStepEnabled('bet', true);
         this.setStepButtonsEnabled('bet', true);
         break;
-      case 'bet':
-        // BET is the final optional step
+      case 'bet': {
+        // Show updated segmentation (with brain mask applied) as overlay
+        const segResult = this.inferenceExecutor.getResult('segmentation');
+        const segFile = segResult?.file;
+        if (segFile && this.inputFile) {
+          this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red').then(() => {
+            this._inputVisible = false;
+            this.viewerController.setBaseOpacity(0);
+            this._segmentationVisible = true;
+            this._overlaySliderValue = 1.0;
+            this.viewerController.setOverlayOpacity(1.0);
+            const opacitySlider = document.getElementById('overlayOpacity');
+            if (opacitySlider) opacitySlider.value = 1.0;
+            const opacityDisplay = document.getElementById('overlayOpacityValue');
+            if (opacityDisplay) opacityDisplay.textContent = '100%';
+            this.syncWindowControls();
+            this.rebuildResultsList();
+          });
+        }
         break;
+      }
     }
 
     // Load stage data into viewer for preprocessing steps
@@ -938,16 +956,6 @@ class VesselBoostApp {
     if (data.stage === 'segmentation') {
       const overlayControl = document.getElementById('overlayControl');
       if (overlayControl) overlayControl.classList.remove('hidden');
-
-      // If segmentation overlay is already visible (e.g. BET re-applied the mask),
-      // remove old overlay and reload with updated data
-      if (this._segmentationVisible && this.nv?.volumes?.length > 1) {
-        this.nv.removeVolumeByIndex(this.nv.volumes.length - 1);
-        const segResult = this.inferenceExecutor.getResult('segmentation');
-        if (segResult?.file) {
-          await this.viewerController.loadOverlay(segResult.file, 'red');
-        }
-      }
     }
   }
 
