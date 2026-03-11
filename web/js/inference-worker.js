@@ -937,6 +937,27 @@ function inverseOrient(data, dims, perm, flip, origDims) {
   return result;
 }
 
+function inverseOrientFloat32(data, dims, perm, flip, origDims) {
+  const [dx, dy, dz] = dims;
+  const [nx, ny, nz] = origDims;
+  const result = new Float32Array(nx * ny * nz);
+  for (let oz = 0; oz < dz; oz++) {
+    for (let oy = 0; oy < dy; oy++) {
+      for (let ox = 0; ox < dx; ox++) {
+        const coords = [ox, oy, oz];
+        const src = [0, 0, 0];
+        for (let i = 0; i < 3; i++) {
+          src[perm[i]] = flip[i] ? (dims[i] - 1 - coords[i]) : coords[i];
+        }
+        const srcIdx = ox + oy*dx + oz*dx*dy;
+        const dstIdx = src[0] + src[1]*nx + src[2]*nx*ny;
+        result[dstIdx] = data[srcIdx];
+      }
+    }
+  }
+  return result;
+}
+
 // ==================== Model Loading ====================
 
 async function fetchModel(url, modelName, progressBase, progressSpan) {
@@ -1243,12 +1264,16 @@ function stepBET(params) {
 
   // BET does NOT modify rasData or invalidate downstream - mask is independent
 
-  // Post masked preview
+  // Post masked preview in original input space (so it aligns with segmentation)
   const maskedPreview = new Float32Array(rasData.length);
   for (let i = 0; i < rasData.length; i++) {
     maskedPreview[i] = brainMask[i] ? rasData[i] : 0;
   }
-  const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
+  let betPreview = maskedPreview;
+  if (!workerState.isIdentity) {
+    betPreview = inverseOrientFloat32(maskedPreview, rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+  const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
   postStageData('bet', betNifti, 'Brain extraction (BET)');
 
   // Re-apply brain mask to existing segmentation if present
@@ -1403,12 +1428,16 @@ async function stepSynthStrip(params) {
   workerState.preBETMask = workerState.brainMask;
   workerState.brainMask = finalMask;
 
-  // 11. Post masked preview
+  // 11. Post masked preview in original input space (so it aligns with segmentation)
   const maskedPreview = new Float32Array(rasData.length);
   for (let i = 0; i < rasData.length; i++) {
     maskedPreview[i] = finalMask[i] ? rasData[i] : 0;
   }
-  const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
+  let betPreview = maskedPreview;
+  if (!workerState.isIdentity) {
+    betPreview = inverseOrientFloat32(maskedPreview, rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+  const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
   postStageData('bet', betNifti, `${modeLabel} brain extraction`);
 
   // Re-apply brain mask to existing segmentation if present
