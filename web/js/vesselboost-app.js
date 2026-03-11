@@ -728,12 +728,12 @@ class VesselBoostApp {
   }
 
   resetProcessingInputs() {
-    // Reset BET method to BET (default)
+    // Reset BET method to SynthStrip (default)
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
-      betMethodSelect.value = 'bet';
+      betMethodSelect.value = 'synthstrip';
       const fiGroup = document.getElementById('betFiGroup');
-      if (fiGroup) fiGroup.style.display = '';
+      if (fiGroup) fiGroup.style.display = 'none';
     }
 
     const betFiInput = document.getElementById('betFiInput');
