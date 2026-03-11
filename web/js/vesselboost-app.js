@@ -389,44 +389,27 @@ class VesselBoostApp {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
 
-    // Compute robust percentile windowing that auto-detects background
-    // level (works regardless of NIfTI scl_slope/scl_inter offset).
-    const { low, high } = computeAutoWindow(vol.img);
+    // computeAutoWindow operates on vol.img which may be raw typed data
+    // (e.g. Int16Array), but vol.cal_min/cal_max are in scaled space
+    // (after NIfTI scl_slope/scl_inter). Convert using global_min/max.
+    const { low, high, min: rawMin, max: rawMax } = computeAutoWindow(vol.img);
 
-    console.log('[auto-contrast] vol.img type:', vol.img?.constructor?.name,
-      'length:', vol.img?.length,
-      'sample[0..4]:', vol.img ? Array.from(vol.img.slice(0, 5)) : 'null');
-    console.log('[auto-contrast] computed: low=', low, 'high=', high);
-    console.log('[auto-contrast] before set: cal_min=', vol.cal_min, 'cal_max=', vol.cal_max,
-      'global_min=', vol.global_min, 'global_max=', vol.global_max);
+    let scaledLow = low;
+    let scaledHigh = high;
+    const rawRange = rawMax - rawMin;
+    const scaledRange = vol.global_max - vol.global_min;
+    if (rawRange > 0 && scaledRange > 0) {
+      // Linear mapping: raw → scaled
+      const slope = scaledRange / rawRange;
+      const inter = vol.global_min - rawMin * slope;
+      scaledLow = low * slope + inter;
+      scaledHigh = high * slope + inter;
+    }
 
-    vol.cal_min = low;
-    vol.cal_max = high;
+    vol.cal_min = scaledLow;
+    vol.cal_max = scaledHigh;
     this.nv.updateGLVolume();
-
-    console.log('[auto-contrast] after updateGLVolume: cal_min=', vol.cal_min, 'cal_max=', vol.cal_max);
-
-    vol.cal_min = low;
-    vol.cal_max = high;
-    this.nv.drawScene();
-
-    console.log('[auto-contrast] after drawScene: cal_min=', vol.cal_min, 'cal_max=', vol.cal_max);
-
     this.syncWindowControls();
-
-    // Check if NiiVue resets values asynchronously
-    setTimeout(() => {
-      if (this.nv.volumes.length) {
-        const v = this.nv.volumes[0];
-        console.log('[auto-contrast] 100ms later: cal_min=', v.cal_min, 'cal_max=', v.cal_max);
-      }
-    }, 100);
-    setTimeout(() => {
-      if (this.nv.volumes.length) {
-        const v = this.nv.volumes[0];
-        console.log('[auto-contrast] 500ms later: cal_min=', v.cal_min, 'cal_max=', v.cal_max);
-      }
-    }, 500);
   }
 
   syncWindowControls() {
