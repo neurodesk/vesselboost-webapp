@@ -42,6 +42,14 @@ jobs:
           cd web
           bash setup.sh
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check JS syntax
+        run: npm install --ignore-scripts && npm run lint
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
