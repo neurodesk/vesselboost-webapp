@@ -385,7 +385,7 @@ class VesselBoostApp {
   applyAutoContrast() {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
-    const { low, high } = computePercentiles(vol.img, 5, 95, 4096, vol.global_min, vol.global_max);
+    const { low, high } = computePercentiles(vol.img, 2, 90, 4096, vol.global_min, vol.global_max);
     vol.cal_min = low;
     vol.cal_max = high;
     // Also update robust_min/max so NiiVue's Auto button uses our percentiles
