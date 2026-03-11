@@ -27,3 +27,6 @@ __pycache__/
 # Rust
 rust-preprocessing/target/
 rust-preprocessing/pkg/
+
+
+node_modules

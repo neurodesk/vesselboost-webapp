@@ -1292,37 +1292,122 @@ async function stepSynthStrip(params) {
   const fast = !!params.fast;
   const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
-  // UNet has 6 pooling levels so input dims must be divisible by 2^6 = 64
-  const PAD_MULTIPLE = 64;
 
   postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
   postLog(`Running ${modeLabel} brain extraction...`);
 
+  // 0. Reorient RAS → LIA (SynthStrip model was trained on LIA-oriented data)
+  //    LIA[0]=flip(RAS[0]), LIA[1]=flip(RAS[2]), LIA[2]=RAS[1]
+  const liaPerm = [0, 2, 1];
+  const liaFlip = [true, true, false];
+  const liaDims = [rasDims[liaPerm[0]], rasDims[liaPerm[1]], rasDims[liaPerm[2]]];
+  const liaSpacing = [rasSpacing[liaPerm[0]], rasSpacing[liaPerm[1]], rasSpacing[liaPerm[2]]];
+  const liaData = new Float32Array(rasData.length);
+  {
+    const [dx, dy, dz] = liaDims;
+    for (let oz = 0; oz < dz; oz++) {
+      for (let oy = 0; oy < dy; oy++) {
+        for (let ox = 0; ox < dx; ox++) {
+          const coords = [ox, oy, oz];
+          const src = [0, 0, 0];
+          for (let i = 0; i < 3; i++) {
+            src[liaPerm[i]] = liaFlip[i] ? (liaDims[i] - 1 - coords[i]) : coords[i];
+          }
+          const srcIdx = src[0] + src[1] * rasDims[0] + src[2] * rasDims[0] * rasDims[1];
+          liaData[ox + oy * dx + oz * dx * dy] = rasData[srcIdx];
+        }
+      }
+    }
+  }
+  postLog(`Reoriented RAS -> LIA: ${rasDims.join('x')} -> ${liaDims.join('x')}`);
+
   // 1. Resample to target spacing
-  const needsResample = rasSpacing[0] !== TARGET_SPACING[0] || rasSpacing[1] !== TARGET_SPACING[1] || rasSpacing[2] !== TARGET_SPACING[2];
+  const needsResample = liaSpacing[0] !== TARGET_SPACING[0] || liaSpacing[1] !== TARGET_SPACING[1] || liaSpacing[2] !== TARGET_SPACING[2];
   let currentData, currentDims;
   if (needsResample) {
-    const resampled = resampleVolume(rasData, rasDims, rasSpacing, TARGET_SPACING);
+    const resampled = resampleVolume(liaData, liaDims, liaSpacing, TARGET_SPACING);
     currentData = resampled.data;
     currentDims = resampled.dims;
-    postLog(`Resampled: ${rasDims.join('x')} -> ${currentDims.join('x')} (${TARGET_SPACING[0]}mm isotropic)`);
+    postLog(`Resampled: ${liaDims.join('x')} -> ${currentDims.join('x')} (${TARGET_SPACING[0]}mm isotropic)`);
   } else {
-    currentData = rasData;
-    currentDims = [...rasDims];
+    currentData = liaData;
+    currentDims = [...liaDims];
   }
 
-  // 2. Normalize to [0,1] using percentile-based scaling (matches FreeSurfer SynthStrip)
-  postProgress(0.05, `${modeLabel}: normalizing...`);
+  // 2. Crop to bounding box + center-pad to model shape (FreeSurfer conform pipeline)
+  //    SynthStrip requires dimensions clamped to [192, 320] in multiples of 64,
+  //    with the brain centered in the padded volume.
+  postProgress(0.05, `${modeLabel}: conforming volume...`);
+  const resampledDims = [...currentDims];
+  const resampledLen = currentDims[0] * currentDims[1] * currentDims[2];
+
+  // 2a. Crop to bounding box of non-zero voxels
+  const [rnx, rny, rnz] = currentDims;
+  let bboxMin = [rnx, rny, rnz], bboxMax = [0, 0, 0];
+  for (let z = 0; z < rnz; z++) {
+    for (let y = 0; y < rny; y++) {
+      for (let x = 0; x < rnx; x++) {
+        if (currentData[x + y * rnx + z * rnx * rny] > 0) {
+          if (x < bboxMin[0]) bboxMin[0] = x;
+          if (y < bboxMin[1]) bboxMin[1] = y;
+          if (z < bboxMin[2]) bboxMin[2] = z;
+          if (x > bboxMax[0]) bboxMax[0] = x;
+          if (y > bboxMax[1]) bboxMax[1] = y;
+          if (z > bboxMax[2]) bboxMax[2] = z;
+        }
+      }
+    }
+  }
+  bboxMax = [bboxMax[0] + 1, bboxMax[1] + 1, bboxMax[2] + 1];
+  const cropDims = [bboxMax[0] - bboxMin[0], bboxMax[1] - bboxMin[1], bboxMax[2] - bboxMin[2]];
+  const croppedData = new Float32Array(cropDims[0] * cropDims[1] * cropDims[2]);
+  for (let z = 0; z < cropDims[2]; z++) {
+    for (let y = 0; y < cropDims[1]; y++) {
+      for (let x = 0; x < cropDims[0]; x++) {
+        const srcIdx = (bboxMin[0] + x) + (bboxMin[1] + y) * rnx + (bboxMin[2] + z) * rnx * rny;
+        croppedData[x + y * cropDims[0] + z * cropDims[0] * cropDims[1]] = currentData[srcIdx];
+      }
+    }
+  }
+  postLog(`Cropped to bbox: ${currentDims.join('x')} -> ${cropDims.join('x')}`);
+
+  // 2b. Compute target shape: multiples of 64, clamped to [192, 320]
+  const targetDims = cropDims.map(s => Math.min(320, Math.max(192, Math.ceil(s / 64) * 64)));
+  // Center offsets for placing cropped data in target volume
+  const centerOffsets = targetDims.map((t, i) => Math.floor((t - cropDims[i]) / 2));
+  const conformedData = new Float32Array(targetDims[0] * targetDims[1] * targetDims[2]);
+  for (let z = 0; z < cropDims[2]; z++) {
+    for (let y = 0; y < cropDims[1]; y++) {
+      for (let x = 0; x < cropDims[0]; x++) {
+        const dx = x + centerOffsets[0];
+        const dy = y + centerOffsets[1];
+        const dz = z + centerOffsets[2];
+        conformedData[dx + dy * targetDims[0] + dz * targetDims[0] * targetDims[1]] =
+          croppedData[x + y * cropDims[0] + z * cropDims[0] * cropDims[1]];
+      }
+    }
+  }
+  currentData = conformedData;
+  currentDims = targetDims;
+  postLog(`Conformed (center+pad): ${cropDims.join('x')} -> ${targetDims.join('x')} (offsets: ${centerOffsets.join(',')})`);
+
+  // 3. Normalize to [0,1] AFTER conform (matches FreeSurfer: normalize the conformed volume)
+  postProgress(0.07, `${modeLabel}: normalizing...`);
+  const totalConformed = currentDims[0] * currentDims[1] * currentDims[2];
   let vMin = Infinity;
-  for (let i = 0; i < currentData.length; i++) {
+  for (let i = 0; i < totalConformed; i++) {
     if (currentData[i] < vMin) vMin = currentData[i];
   }
-  // Compute 99th percentile — use sampling in fast mode to avoid full sort
+  // Subtract min
+  for (let i = 0; i < totalConformed; i++) {
+    currentData[i] -= vMin;
+  }
+  // Compute 99th percentile
   let p99;
   if (fast) {
-    const sampleSize = Math.min(10000, currentData.length);
+    const sampleSize = Math.min(10000, totalConformed);
     const sample = new Float32Array(sampleSize);
-    const step = currentData.length / sampleSize;
+    const step = totalConformed / sampleSize;
     for (let i = 0; i < sampleSize; i++) {
       sample[i] = currentData[Math.floor(i * step)];
     }
@@ -1330,26 +1415,13 @@ async function stepSynthStrip(params) {
     p99 = sample[Math.floor(sampleSize * 0.99)];
   } else {
     const sorted = Float32Array.from(currentData).sort();
-    p99 = sorted[Math.floor(currentData.length * 0.99)];
+    p99 = sorted[Math.floor(totalConformed * 0.99)];
   }
-  const vRange = p99 - vMin || 1;
-  const normalized = new Float32Array(currentData.length);
-  for (let i = 0; i < currentData.length; i++) {
-    normalized[i] = Math.min(1, Math.max(0, (currentData[i] - vMin) / vRange));
+  const vRange = p99 || 1;
+  for (let i = 0; i < totalConformed; i++) {
+    currentData[i] = Math.min(1, Math.max(0, currentData[i] / vRange));
   }
-  currentData = normalized;
   postLog(`Normalized to [0,1]: min=${vMin.toFixed(2)}, p99=${p99.toFixed(2)}`);
-
-  // 3. Zero-pad to multiples of 64 (required by UNet's 6 pooling levels)
-  postProgress(0.07, `${modeLabel}: padding...`);
-  const prePadDims = [...currentDims];
-  const padded = zeroPadToPatchMultiple(currentData, currentDims, PAD_MULTIPLE);
-  if (padded.dims[0] !== currentDims[0] || padded.dims[1] !== currentDims[1] || padded.dims[2] !== currentDims[2]) {
-    postLog(`Zero-padded: ${currentDims.join('x')} -> ${padded.dims.join('x')}`);
-    currentData = padded.data;
-    currentDims = padded.dims;
-  }
-
   // 4. Download model
   const modelBaseUrl = params.modelBaseUrl;
   const modelUrl = `${modelBaseUrl}/synthstrip.onnx`;
@@ -1369,14 +1441,37 @@ async function stepSynthStrip(params) {
   const totalVoxels = currentDims[0] * currentDims[1] * currentDims[2];
 
   // 6. Single-pass full-volume inference (SynthStrip requires full brain context)
+  //    ONNX expects row-major (C-order) data but the worker uses column-major
+  //    (x + y*nx + z*nx*ny). Transpose before inference, transpose output back.
   postProgress(0.30, `${modeLabel}: running inference on ${currentDims.join('x')} volume...`);
   postLog(`${modeLabel} single-pass inference: ${currentDims.join('x')} (${(totalVoxels/1e6).toFixed(1)}M voxels)`);
+  const [cnx, cny, cnz] = currentDims;
 
-  const inputTensor = new ort.Tensor('float32', currentData, [1, 1, ...currentDims]);
+  // Column-major → row-major (C-order) for ONNX
+  const cOrderInput = new Float32Array(totalVoxels);
+  for (let z = 0; z < cnz; z++) {
+    for (let y = 0; y < cny; y++) {
+      for (let x = 0; x < cnx; x++) {
+        cOrderInput[x * cny * cnz + y * cnz + z] = currentData[x + y * cnx + z * cnx * cny];
+      }
+    }
+  }
+
+  const inputTensor = new ort.Tensor('float32', cOrderInput, [1, 1, ...currentDims]);
   const results = await session.run({ [inputName]: inputTensor });
-  const sdtData = results[outputName].data;
+  const sdtRaw = results[outputName].data;
   inputTensor.dispose();
   session.release();
+
+  // Row-major → column-major for the rest of the pipeline
+  const sdtData = new Float32Array(totalVoxels);
+  for (let z = 0; z < cnz; z++) {
+    for (let y = 0; y < cny; y++) {
+      for (let x = 0; x < cnx; x++) {
+        sdtData[x + y * cnx + z * cnx * cny] = sdtRaw[x * cny * cnz + y * cnz + z];
+      }
+    }
+  }
 
   // 7. Threshold SDT -> brain mask (SDT < border means inside brain; FreeSurfer default border=1)
   const SDT_BORDER = 1;
@@ -1396,25 +1491,60 @@ async function stepSynthStrip(params) {
     }
   }
 
-  // Crop back to resampled dims (inverse of zero-padding)
-  let resampledMask;
-  if (prePadDims[0] !== currentDims[0] || prePadDims[1] !== currentDims[1] || prePadDims[2] !== currentDims[2]) {
-    resampledMask = unpadVolume(paddedMask, currentDims, prePadDims);
-  } else {
-    resampledMask = paddedMask;
+  // Reverse center+pad: extract the cropped region from the conformed mask
+  const croppedMask = new Uint8Array(cropDims[0] * cropDims[1] * cropDims[2]);
+  for (let z = 0; z < cropDims[2]; z++) {
+    for (let y = 0; y < cropDims[1]; y++) {
+      for (let x = 0; x < cropDims[0]; x++) {
+        const sx = x + centerOffsets[0];
+        const sy = y + centerOffsets[1];
+        const sz = z + centerOffsets[2];
+        croppedMask[x + y * cropDims[0] + z * cropDims[0] * cropDims[1]] =
+          paddedMask[sx + sy * targetDims[0] + sz * targetDims[0] * targetDims[1]];
+      }
+    }
+  }
+
+  // Reverse crop: place cropped mask back into resampled volume
+  let resampledMask = new Uint8Array(resampledLen);
+  for (let z = 0; z < cropDims[2]; z++) {
+    for (let y = 0; y < cropDims[1]; y++) {
+      for (let x = 0; x < cropDims[0]; x++) {
+        const dstIdx = (bboxMin[0] + x) + (bboxMin[1] + y) * rnx + (bboxMin[2] + z) * rnx * rny;
+        resampledMask[dstIdx] = croppedMask[x + y * cropDims[0] + z * cropDims[0] * cropDims[1]];
+      }
+    }
   }
 
   // 8. Keep largest connected component and fill holes (matches FreeSurfer)
   postProgress(0.89, `${modeLabel}: cleaning mask...`);
-  resampledMask = keepLargestComponentAndFill(resampledMask, prePadDims);
+  resampledMask = keepLargestComponentAndFill(resampledMask, resampledDims);
 
-  // 9. Resample mask back to original RAS dims
+  // 9. Resample mask back to LIA original dims, then reorient to RAS
   postProgress(0.90, `${modeLabel}: resampling mask...`);
-  let finalMask;
+  let liaMask;
   if (needsResample) {
-    finalMask = resampleLabelsNearest(resampledMask, prePadDims, rasDims);
+    liaMask = resampleLabelsNearest(resampledMask, resampledDims, liaDims);
   } else {
-    finalMask = resampledMask;
+    liaMask = resampledMask;
+  }
+  // Reorient LIA → RAS (inverse of RAS → LIA)
+  const finalMask = new Uint8Array(rasData.length);
+  {
+    const [dx, dy, dz] = liaDims;
+    for (let oz = 0; oz < dz; oz++) {
+      for (let oy = 0; oy < dy; oy++) {
+        for (let ox = 0; ox < dx; ox++) {
+          if (!liaMask[ox + oy * dx + oz * dx * dy]) continue;
+          const coords = [ox, oy, oz];
+          const dst = [0, 0, 0];
+          for (let i = 0; i < 3; i++) {
+            dst[liaPerm[i]] = liaFlip[i] ? (liaDims[i] - 1 - coords[i]) : coords[i];
+          }
+          finalMask[dst[0] + dst[1] * rasDims[0] + dst[2] * rasDims[0] * rasDims[1]] = 1;
+        }
+      }
+    }
   }
 
   let finalCount = 0;

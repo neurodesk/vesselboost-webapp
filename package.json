@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "nifti-reader-js": "^0.8.0",
+    "onnxruntime-node": "^1.24.3"
+  }
+}
