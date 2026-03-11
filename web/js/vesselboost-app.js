@@ -13,7 +13,6 @@ import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
 import { generateNiivueColormap, getLabelName } from './app/labels.js';
-import { computeAutoWindow } from './modules/ui/percentile.js';
 
 class VesselBoostApp {
   constructor() {
@@ -385,12 +384,20 @@ class VesselBoostApp {
   applyAutoContrast() {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
-    const { low, high } = computeAutoWindow(vol.img);
+
+    // Use NiiVue's own robust percentiles (2nd/98th) computed during loading.
+    // These handle all NIfTI data types and scl_slope/scl_inter correctly.
+    let low = vol.robust_min;
+    let high = vol.robust_max;
+
+    // Fallback if NiiVue's robust range is degenerate
+    if (low == null || high == null || high <= low) {
+      low = vol.global_min ?? 0;
+      high = vol.global_max ?? 1;
+    }
+
     vol.cal_min = low;
     vol.cal_max = high;
-    // Also update robust_min/max so NiiVue's Auto button uses our percentiles
-    vol.robust_min = low;
-    vol.robust_max = high;
     this.nv.updateGLVolume();
     this.syncWindowControls();
   }
