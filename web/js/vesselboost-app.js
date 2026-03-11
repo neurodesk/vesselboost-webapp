@@ -389,31 +389,12 @@ class VesselBoostApp {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
 
-    // Check if volume looks like a masked volume (many near-zero voxels).
-    // For masked volumes (e.g. brain extraction), NiiVue's robust percentiles
-    // include zeros and produce poor contrast. Use MRA-aware windowing instead.
-    let low, high;
-    const img = vol.img;
-    let nearZero = 0;
-    const sample = Math.min(img.length, 100000);
-    const step = Math.max(1, Math.floor(img.length / sample));
-    for (let i = 0; i < img.length; i += step) {
-      if (Math.abs(img[i]) <= 1e-6) nearZero++;
-    }
-    const zeroFraction = nearZero / Math.ceil(img.length / step);
-
-    if (zeroFraction > 0.3) {
-      // Masked volume: use MRA-aware windowing that ignores background
-      ({ low, high } = computeAutoWindow(img));
-    } else {
-      // Unmasked volume: use NiiVue's robust percentiles
-      low = vol.robust_min;
-      high = vol.robust_max;
-      if (low == null || high == null || high <= low) {
-        low = vol.global_min ?? 0;
-        high = vol.global_max ?? 1;
-      }
-    }
+    // Always use histogram-based percentile windowing.
+    // This handles both masked and unmasked MRA volumes well by computing
+    // percentiles on non-background voxels, which is robust to the skewed
+    // intensity distributions typical of angiography data (including after
+    // N4 bias field correction where near-zero counts change).
+    const { low, high } = computeAutoWindow(vol.img);
 
     vol.cal_min = low;
     vol.cal_max = high;
