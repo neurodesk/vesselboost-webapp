@@ -1,4 +1,4 @@
-export const VERSION = '2.0.54';
+export const VERSION = '2.0.55';
 
 // Model - relative path (served from same origin)
 export const MODEL_BASE_URL = './models';
@@ -106,6 +106,6 @@ export const CACHE_CONFIG = {
   maxSizeMB: 500
 };
 
-export const PIPELINE_STEPS = ['load', 'n4', 'bet', 'denoise', 'inference'];
+export const PIPELINE_STEPS = ['load', 'n4', 'denoise', 'inference', 'bet'];
 
 if (typeof self !== 'undefined') self.VesselBoostConfig = { VERSION, MODEL_BASE_URL, MODEL, MODELS, SYNTHSTRIP_MODEL, SYNTHSTRIP_FAST_MODEL, INFERENCE_DEFAULTS, VIEWER_CONFIG, PROGRESS_CONFIG, STAGE_NAMES, ONNX_CONFIG, CACHE_CONFIG, PIPELINE_STEPS };

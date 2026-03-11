@@ -701,12 +701,12 @@ class VesselBoostApp {
   }
 
   resetProcessingInputs() {
-    // Reset BET method to SynthStrip (default)
+    // Reset BET method to BET (default)
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
-      betMethodSelect.value = 'synthstrip-fast';
+      betMethodSelect.value = 'bet';
       const fiGroup = document.getElementById('betFiGroup');
-      if (fiGroup) fiGroup.style.display = 'none';
+      if (fiGroup) fiGroup.style.display = '';
     }
 
     const betFiInput = document.getElementById('betFiInput');
@@ -798,14 +798,6 @@ class VesselBoostApp {
         this.setStepButtonsEnabled('n4', true);
         break;
       case 'n4':
-        this.setStepEnabled('bet', true);
-        this.setStepButtonsEnabled('bet', true);
-        this.setStepEnabled('denoise', true);
-        this.setStepButtonsEnabled('denoise', true);
-        break;
-      case 'bet':
-        // BET doesn't gate anything - denoise is already enabled from n4
-        // But ensure denoise is enabled if it wasn't already
         this.setStepEnabled('denoise', true);
         this.setStepButtonsEnabled('denoise', true);
         break;
@@ -814,7 +806,12 @@ class VesselBoostApp {
         this.setStepButtonsEnabled('inference', true);
         break;
       case 'inference':
-        // Handled by onInferenceComplete
+        // Handled by onInferenceComplete — enable BET after segmentation
+        this.setStepEnabled('bet', true);
+        this.setStepButtonsEnabled('bet', true);
+        break;
+      case 'bet':
+        // BET is the final optional step
         break;
     }
 
@@ -1080,14 +1077,14 @@ class VesselBoostApp {
   }
 
   onWorkerInitialized() {
-    // If WASM preprocessing not available, auto-select SynthStrip and disable BET option
+    // If WASM preprocessing not available, auto-select SynthStrip Fast and disable BET option
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect && !this.inferenceExecutor.wasmAvailable) {
       betMethodSelect.value = 'synthstrip-fast';
       // Disable the BET option
       const betOption = betMethodSelect.querySelector('option[value="bet"]');
       if (betOption) betOption.disabled = true;
-      // Hide FI group
+      // Hide FI group (not needed for SynthStrip)
       const fiGroup = document.getElementById('betFiGroup');
       if (fiGroup) fiGroup.style.display = 'none';
     }

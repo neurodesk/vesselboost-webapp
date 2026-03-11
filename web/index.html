@@ -77,39 +77,11 @@
         </div>
       </section>
 
-      <!-- Step 2: Brain Extraction -->
-      <section class="sidebar-section step-section step-disabled" id="stepBETSection">
-        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/></svg>
-          <span>Step 2: Brain Extraction</span>
-          <span class="step-badge" id="stepBETBadge"></span>
-        </h2>
-        <div class="section-content">
-          <p class="step-description">Brain mask applied to final segmentation output. Can re-run with different settings.</p>
-          <div class="param-group">
-            <label class="param-label" for="betMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">SynthStrip Fast: coarser resolution (2mm) for quick brain extraction. SynthStrip: full resolution (1mm) for precise extraction. BET: traditional brain extraction (requires WASM).</span></span></label>
-            <select id="betMethodSelect">
-              <option value="synthstrip-fast">SynthStrip Fast</option>
-              <option value="synthstrip">SynthStrip</option>
-              <option value="bet">BET (traditional)</option>
-            </select>
-          </div>
-          <div id="betFiGroup" class="param-group" style="display: none;">
-            <label class="param-label" for="betFiInput">Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0-1.0). Smaller values give larger brain outlines. Default: 0.5.</span></span></label>
-            <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
-          </div>
-          <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>Run</button>
-            <button class="btn btn-secondary btn-sm" id="skipBETBtn" disabled>Skip</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Step 3: Denoising -->
+      <!-- Step 2: Denoising -->
       <section class="sidebar-section step-section step-disabled" id="stepDenoiseSection">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446A9 9 0 1 1 12 3z"/></svg>
-          <span>Step 3: Denoising</span>
+          <span>Step 2: Denoising</span>
           <span class="step-badge" id="stepDenoiseBadge"></span>
         </h2>
         <div class="section-content">
@@ -129,11 +101,11 @@
         </div>
       </section>
 
-      <!-- Step 5: Vessel Segmentation -->
+      <!-- Step 3: Vessel Segmentation -->
       <section class="sidebar-section step-section step-disabled" id="stepInferenceSection">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <span>Step 4: Vessel Segmentation</span>
+          <span>Step 3: Vessel Segmentation</span>
           <span class="step-badge" id="stepInferenceBadge"></span>
         </h2>
         <div class="section-content">
@@ -168,6 +140,34 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run
             </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 4: Brain Extraction (post-segmentation masking) -->
+      <section class="sidebar-section step-section step-disabled" id="stepBETSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/></svg>
+          <span>Step 4: Brain Extraction</span>
+          <span class="step-badge" id="stepBETBadge"></span>
+        </h2>
+        <div class="section-content">
+          <p class="step-description">Mask segmentation to brain region. Removes false positives outside the brain.</p>
+          <div class="param-group">
+            <label class="param-label" for="betMethodSelect">Method <span class="info-icon">i<span class="info-tooltip">BET: traditional brain extraction (recommended, requires WASM). SynthStrip: deep learning skull-stripping (1mm). SynthStrip Fast: coarser resolution (2mm).</span></span></label>
+            <select id="betMethodSelect">
+              <option value="bet" selected>BET (traditional)</option>
+              <option value="synthstrip">SynthStrip</option>
+              <option value="synthstrip-fast">SynthStrip Fast</option>
+            </select>
+          </div>
+          <div id="betFiGroup" class="param-group">
+            <label class="param-label" for="betFiInput">Fractional Intensity <span class="info-icon">i<span class="info-tooltip">BET fractional intensity threshold (0.0-1.0). Smaller values give larger brain outlines. Default: 0.5.</span></span></label>
+            <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
+          </div>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>Run</button>
+            <button class="btn btn-secondary btn-sm" id="skipBETBtn" disabled>Skip</button>
           </div>
         </div>
       </section>
