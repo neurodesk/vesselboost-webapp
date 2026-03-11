@@ -389,16 +389,19 @@ class VesselBoostApp {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
 
-    // Always use histogram-based percentile windowing.
-    // This handles both masked and unmasked MRA volumes well by computing
-    // percentiles on non-background voxels, which is robust to the skewed
-    // intensity distributions typical of angiography data (including after
-    // N4 bias field correction where near-zero counts change).
+    // Compute robust percentile windowing that auto-detects background
+    // level (works regardless of NIfTI scl_slope/scl_inter offset).
     const { low, high } = computeAutoWindow(vol.img);
 
+    // Set cal values, rebuild GL texture, then set again and redraw.
+    // NiiVue's updateGLVolume() may reset cal_min/cal_max from the
+    // NIfTI header, so we re-apply after the GL update.
     vol.cal_min = low;
     vol.cal_max = high;
     this.nv.updateGLVolume();
+    vol.cal_min = low;
+    vol.cal_max = high;
+    this.nv.drawScene();
     this.syncWindowControls();
   }
 
