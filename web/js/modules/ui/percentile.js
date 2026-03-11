@@ -1,84 +1,38 @@
 /**
- * Histogram-based percentile computation for auto-contrast windowing.
- * O(n) time, fixed ~16KB memory (4096 bins).
+ * Auto-contrast windowing for MRA volumes.
+ * Uses mean ± k*std of non-zero voxels, which handles the
+ * heavily skewed intensity distribution of angiography data
+ * better than fixed percentiles.
  */
 
 /**
- * Compute percentile values from a volume image using a histogram approach.
- * Skips zero voxels (background).
+ * Compute auto-contrast window using mean/std of non-zero voxels.
  *
  * @param {TypedArray} img - Volume image data
- * @param {number} pLow - Lower percentile (default 2)
- * @param {number} pHigh - Upper percentile (default 98)
- * @param {number} numBins - Number of histogram bins (default 4096)
- * @param {number} [dataMin] - Data minimum (computed if not provided)
- * @param {number} [dataMax] - Data maximum (computed if not provided)
- * @returns {{ low: number, high: number }} Percentile values
+ * @param {number} [globalMin] - Data minimum (clamps lower bound)
+ * @returns {{ low: number, high: number }}
  */
-export function computePercentiles(img, pLow = 2, pHigh = 98, numBins = 4096, dataMin, dataMax) {
-  // Single pass: find min/max of non-zero voxels and count them
-  let min = dataMin ?? Infinity;
-  let max = dataMax ?? -Infinity;
-  let nonZeroCount = 0;
-
-  const needMinMax = (dataMin === undefined || dataMax === undefined);
+export function computeAutoWindow(img, globalMin) {
+  let sum = 0;
+  let sumSq = 0;
+  let count = 0;
 
   for (let i = 0; i < img.length; i++) {
     const v = img[i];
     if (v === 0) continue;
-    nonZeroCount++;
-    if (needMinMax) {
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
+    sum += v;
+    sumSq += v * v;
+    count++;
   }
 
-  // Edge case: all zeros
-  if (nonZeroCount === 0) return { low: 0, high: 1 };
+  if (count === 0) return { low: 0, high: 1 };
 
-  // Edge case: all same value
-  if (min >= max) return { low: min, high: min };
+  const mean = sum / count;
+  const variance = sumSq / count - mean * mean;
+  const std = Math.sqrt(Math.max(0, variance));
 
-  // Build histogram
-  const histogram = new Uint32Array(numBins);
-  const range = max - min;
-  const scale = (numBins - 1) / range;
-
-  for (let i = 0; i < img.length; i++) {
-    const v = img[i];
-    if (v === 0) continue;
-    const bin = Math.min(numBins - 1, Math.floor((v - min) * scale));
-    histogram[bin]++;
-  }
-
-  // Walk histogram to find percentile edges
-  const targetLow = Math.floor((pLow / 100) * nonZeroCount);
-  const targetHigh = Math.floor((pHigh / 100) * nonZeroCount);
-
-  let cumulative = 0;
-  let lowBin = 0;
-  let highBin = numBins - 1;
-
-  for (let i = 0; i < numBins; i++) {
-    cumulative += histogram[i];
-    if (cumulative >= targetLow) {
-      lowBin = i;
-      break;
-    }
-  }
-
-  cumulative = 0;
-  for (let i = 0; i < numBins; i++) {
-    cumulative += histogram[i];
-    if (cumulative >= targetHigh) {
-      highBin = i;
-      break;
-    }
-  }
-
-  // Convert bin indices back to values
-  const low = min + (lowBin / (numBins - 1)) * range;
-  const high = min + (highBin / (numBins - 1)) * range;
+  const low = Math.max(globalMin ?? 0, mean - 0.5 * std);
+  const high = mean + 2 * std;
 
   return { low, high };
 }

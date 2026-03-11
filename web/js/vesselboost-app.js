@@ -13,7 +13,7 @@ import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
 import { generateNiivueColormap, getLabelName } from './app/labels.js';
-import { computePercentiles } from './modules/ui/percentile.js';
+import { computeAutoWindow } from './modules/ui/percentile.js';
 
 class VesselBoostApp {
   constructor() {
@@ -385,7 +385,7 @@ class VesselBoostApp {
   applyAutoContrast() {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
-    const { low, high } = computePercentiles(vol.img, 2, 90, 4096, vol.global_min, vol.global_max);
+    const { low, high } = computeAutoWindow(vol.img, vol.global_min);
     vol.cal_min = low;
     vol.cal_max = high;
     // Also update robust_min/max so NiiVue's Auto button uses our percentiles
