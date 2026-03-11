@@ -215,6 +215,12 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'skip-bet' });
   }
 
+  async applyBrainMask() {
+    await this.initialize();
+    this.running = true;
+    this.worker.postMessage({ type: 'apply-brain-mask' });
+  }
+
   async runDenoise(method) {
     await this.initialize();
     this.running = true;

@@ -1276,9 +1276,6 @@ function stepBET(params) {
   const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
   postStageData('bet', betNifti, 'Brain extraction (BET)');
 
-  // Re-apply brain mask to existing segmentation if present
-  reapplyBrainMaskToSegmentation();
-
   postProgress(1.0, 'BET complete');
   postStepComplete('bet');
 }
@@ -1582,9 +1579,6 @@ async function stepSynthStrip(params) {
   }
   const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
   postStageData('bet', betNifti, `${modeLabel} brain extraction`);
-
-  // Re-apply brain mask to existing segmentation if present
-  reapplyBrainMaskToSegmentation();
 
   postProgress(1.0, `${modeLabel} complete`);
   postStepComplete('bet');
@@ -1951,6 +1945,11 @@ self.onmessage = async (e) => {
       // Re-apply updated mask (or no mask) to segmentation
       reapplyBrainMaskToSegmentation();
       postStepComplete('bet');
+      break;
+
+    case 'apply-brain-mask':
+      reapplyBrainMaskToSegmentation();
+      postStepComplete('apply-brain-mask');
       break;
 
     case 'skip-denoise':

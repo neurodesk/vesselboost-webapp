@@ -13,6 +13,7 @@ import { ProgressManager } from './modules/ui/ProgressManager.js';
 import { ModalManager } from './modules/ui/ModalManager.js';
 import * as Config from './app/config.js';
 import { generateNiivueColormap, getLabelName } from './app/labels.js';
+import { computeAutoWindow } from './modules/ui/percentile.js';
 
 class VesselBoostApp {
   constructor() {
@@ -150,6 +151,9 @@ class VesselBoostApp {
 
     const skipBET = document.getElementById('skipBETBtn');
     if (skipBET) skipBET.addEventListener('click', () => this.skipBET());
+
+    const applyBET = document.getElementById('applyBETBtn');
+    if (applyBET) applyBET.addEventListener('click', () => this.applyBrainMask());
 
     // BET method dropdown: toggle FI visibility
     const betMethodSelect = document.getElementById('betMethodSelect');
@@ -385,16 +389,10 @@ class VesselBoostApp {
     if (!this.nv.volumes.length) return;
     const vol = this.nv.volumes[0];
 
-    // Use NiiVue's own robust percentiles (2nd/98th) computed during loading.
-    // These handle all NIfTI data types and scl_slope/scl_inter correctly.
-    let low = vol.robust_min;
-    let high = vol.robust_max;
-
-    // Fallback if NiiVue's robust range is degenerate
-    if (low == null || high == null || high <= low) {
-      low = vol.global_min ?? 0;
-      high = vol.global_max ?? 1;
-    }
+    // Use MRA-aware auto-window that ignores background (zero) voxels.
+    // NiiVue's robust_min/robust_max include zeros, which produces poor
+    // contrast for masked volumes (e.g. brain extraction).
+    const { low, high } = computeAutoWindow(vol.img);
 
     vol.cal_min = low;
     vol.cal_max = high;
@@ -581,6 +579,13 @@ class VesselBoostApp {
     // Remove BET result and let onStepComplete('bet') restore the segmentation view
     this.inferenceExecutor.removeResult('bet');
     this.inferenceExecutor.skipBET();
+  }
+
+  async applyBrainMask() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const applyBtn = document.getElementById('applyBETBtn');
+    if (applyBtn) applyBtn.disabled = true;
+    await this.inferenceExecutor.applyBrainMask();
   }
 
   async runDenoise() {
@@ -784,7 +789,7 @@ class VesselBoostApp {
     this.nv.updateGLVolume();
   }
 
-  onStepComplete(step) {
+  async onStepComplete(step) {
     const status = this.inferenceExecutor.getStepStatus(step);
     this.updateStepBadge(step, status);
     this.setStepButtonsEnabled(step, true);
@@ -812,11 +817,15 @@ class VesselBoostApp {
         this.setStepButtonsEnabled('bet', true);
         break;
       case 'bet': {
-        // Show updated segmentation (with brain mask applied) as overlay
-        const segResult = this.inferenceExecutor.getResult('segmentation');
-        const segFile = segResult?.file;
-        if (segFile && this.inputFile) {
-          this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red').then(() => {
+        const applyGroup = document.getElementById('applyBETGroup');
+        if (status === 'skipped') {
+          // Hide apply button when BET is skipped/undone
+          if (applyGroup) applyGroup.classList.add('hidden');
+          // Show segmentation overlay (reverted to previous mask state)
+          const segResult = this.inferenceExecutor.getResult('segmentation');
+          const segFile = segResult?.file;
+          if (segFile && this.inputFile) {
+            await this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red');
             this._inputVisible = false;
             this.viewerController.setBaseOpacity(0);
             this._segmentationVisible = true;
@@ -827,9 +836,43 @@ class VesselBoostApp {
             const opacityDisplay = document.getElementById('overlayOpacityValue');
             if (opacityDisplay) opacityDisplay.textContent = '100%';
             this.syncWindowControls();
-            this.rebuildResultsList();
-          });
+          }
+        } else {
+          // Show brain extraction result and reveal the apply button
+          const betResult = this.inferenceExecutor.getResult('bet');
+          if (betResult?.file) {
+            await this.viewerController.loadBaseVolume(betResult.file);
+            this.applyDefaultBaseColormap();
+            this.syncWindowControls();
+            this.applyAutoContrast();
+          }
+          if (applyGroup) applyGroup.classList.remove('hidden');
+          const applyBtn = document.getElementById('applyBETBtn');
+          if (applyBtn) applyBtn.disabled = false;
         }
+        this.rebuildResultsList();
+        break;
+      }
+      case 'apply-brain-mask': {
+        // Show updated segmentation (with brain mask applied) as overlay
+        const segResult = this.inferenceExecutor.getResult('segmentation');
+        const segFile = segResult?.file;
+        if (segFile && this.inputFile) {
+          await this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red');
+          this._inputVisible = false;
+          this.viewerController.setBaseOpacity(0);
+          this._segmentationVisible = true;
+          this._overlaySliderValue = 1.0;
+          this.viewerController.setOverlayOpacity(1.0);
+          const opacitySlider = document.getElementById('overlayOpacity');
+          if (opacitySlider) opacitySlider.value = 1.0;
+          const opacityDisplay = document.getElementById('overlayOpacityValue');
+          if (opacityDisplay) opacityDisplay.textContent = '100%';
+          this.syncWindowControls();
+          this.rebuildResultsList();
+        }
+        const applyGroupDone = document.getElementById('applyBETGroup');
+        if (applyGroupDone) applyGroupDone.classList.add('hidden');
         break;
       }
     }
