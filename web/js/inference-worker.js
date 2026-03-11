@@ -1290,11 +1290,23 @@ async function stepSynthStrip(params) {
 
   const { rasData, rasDims, rasSpacing, headerBytes } = workerState;
   const fast = !!params.fast;
-  const TARGET_SPACING = fast ? [2.0, 2.0, 2.0] : [1.0, 1.0, 1.0];
+  let TARGET_SPACING;
+  if (fast) {
+    // Adaptive spacing: ensure smallest resampled dimension >= 48 voxels
+    // This prevents excessive downsampling of high-resolution data (e.g., 0.3mm TOF)
+    const MIN_RESAMPLED_DIM = 48;
+    const physicalExtents = rasDims.map((d, i) => d * rasSpacing[i]);
+    const minExtent = Math.min(...physicalExtents);
+    const maxSpacing = Math.min(2.0, minExtent / MIN_RESAMPLED_DIM);
+    const sp = Math.max(1.0, maxSpacing);
+    TARGET_SPACING = [sp, sp, sp];
+  } else {
+    TARGET_SPACING = [1.0, 1.0, 1.0];
+  }
   const modeLabel = fast ? 'SynthStrip Fast' : 'SynthStrip';
 
-  postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0]}mm...`);
-  postLog(`Running ${modeLabel} brain extraction...`);
+  postProgress(0.02, `${modeLabel}: resampling to ${TARGET_SPACING[0].toFixed(2)}mm...`);
+  postLog(`Running ${modeLabel} brain extraction (target spacing: ${TARGET_SPACING[0].toFixed(2)}mm)...`);
 
   // 0. Reorient RAS → LIA (SynthStrip model was trained on LIA-oriented data)
   //    LIA[0]=flip(RAS[0]), LIA[1]=flip(RAS[2]), LIA[2]=RAS[1]
@@ -1402,20 +1414,21 @@ async function stepSynthStrip(params) {
   for (let i = 0; i < totalConformed; i++) {
     currentData[i] -= vMin;
   }
-  // Compute 99th percentile
+  // Compute 99th percentile (of non-zero voxels to avoid bias from padding)
   let p99;
-  if (fast) {
-    const sampleSize = Math.min(10000, totalConformed);
-    const sample = new Float32Array(sampleSize);
-    const step = totalConformed / sampleSize;
-    for (let i = 0; i < sampleSize; i++) {
-      sample[i] = currentData[Math.floor(i * step)];
+  {
+    // Collect non-zero voxels (brain region only, excluding padding)
+    let nonZeroCount = 0;
+    for (let i = 0; i < totalConformed; i++) {
+      if (currentData[i] > 0) nonZeroCount++;
     }
-    sample.sort();
-    p99 = sample[Math.floor(sampleSize * 0.99)];
-  } else {
-    const sorted = Float32Array.from(currentData).sort();
-    p99 = sorted[Math.floor(totalConformed * 0.99)];
+    const nonZero = new Float32Array(nonZeroCount);
+    let idx = 0;
+    for (let i = 0; i < totalConformed; i++) {
+      if (currentData[i] > 0) nonZero[idx++] = currentData[i];
+    }
+    nonZero.sort();
+    p99 = nonZeroCount > 0 ? nonZero[Math.floor(nonZeroCount * 0.99)] : 1;
   }
   const vRange = p99 || 1;
   for (let i = 0; i < totalConformed; i++) {
