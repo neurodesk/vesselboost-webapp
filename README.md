@@ -113,6 +113,17 @@ vesselboost-webapp/
 12. Remove small connected components
 13. Inverse orient -> output NIfTI
 
+## Linting
+
+A syntax checker runs before every GitHub Pages deploy to catch JS errors (e.g. `await` in non-async functions) that would silently break the webapp. You can run it locally:
+
+```bash
+npm install
+npm run lint
+```
+
+This parses all JS files under `web/` using [acorn](https://github.com/acornjs/acorn) and reports any syntax errors with file, line, and column.
+
 ## Validation
 
 Compare the web app output against the Python VesselBoost pipeline:
