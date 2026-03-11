@@ -968,9 +968,17 @@ class VesselBoostApp {
     const dlSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
     const viewSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
-    // Input row (always present, with visibility toggle)
+    // Input row (always present, with visibility toggle and view button)
     const inputRow = document.createElement('div');
     inputRow.className = 'volume-toggle';
+
+    const inputViewBtn = document.createElement('button');
+    inputViewBtn.className = 'view-btn';
+    inputViewBtn.title = 'View Input';
+    inputViewBtn.innerHTML = viewSvg;
+    inputViewBtn.dataset.stage = 'input';
+    inputViewBtn.addEventListener('click', () => this.viewStage('input'));
+    inputRow.appendChild(inputViewBtn);
 
     const inputLabel = document.createElement('label');
     inputLabel.className = 'viewer-checkbox';
