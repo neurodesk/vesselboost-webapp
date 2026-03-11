@@ -1129,7 +1129,7 @@ class VesselBoostApp {
     }
   }
 
-  onInferenceComplete() {
+  async onInferenceComplete() {
     const cancelBtn = document.getElementById('cancelButton');
     const statusText = document.getElementById('statusText');
     if (cancelBtn) cancelBtn.disabled = true;
