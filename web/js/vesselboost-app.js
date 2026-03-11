@@ -1087,7 +1087,12 @@ class VesselBoostApp {
     const container = document.getElementById('stageButtons');
     if (container) {
       container.querySelectorAll('.view-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.stage === stage);
+        if (btn.dataset.stage === 'segmentation') {
+          // Segmentation eye reflects overlay visibility, not base selection
+          btn.classList.toggle('active', this._segmentationVisible);
+        } else {
+          btn.classList.toggle('active', btn.dataset.stage === stage);
+        }
       });
     }
   }
@@ -1130,23 +1135,25 @@ class VesselBoostApp {
     if (cancelBtn) cancelBtn.disabled = true;
     if (statusText) statusText.textContent = 'Ready';
 
-    // Show segmentation with input hidden by default
+    // Show segmentation overlay only (hide base volume to avoid flash)
     const fullResult = this.inferenceExecutor.getResult('segmentation');
     const overlayFile = fullResult?.file;
-    if (overlayFile && this.inputFile) {
-      this.viewerController.showResultAsOverlay(this.inputFile, overlayFile, 'red').then(() => {
-        // Hide input volume by default - show only vessel segmentation
-        this._inputVisible = false;
-        this.viewerController.setBaseOpacity(0);
-        // Set overlay to full opacity since it's the only visible volume
-        this._overlaySliderValue = 1.0;
-        this.viewerController.setOverlayOpacity(1.0);
-        const opacitySlider = document.getElementById('overlayOpacity');
-        if (opacitySlider) opacitySlider.value = 1.0;
-        const opacityDisplay = document.getElementById('overlayOpacityValue');
-        if (opacityDisplay) opacityDisplay.textContent = '100%';
-        this.syncWindowControls();
-      });
+    if (overlayFile) {
+      // Hide base volume first to prevent input image flash
+      this._inputVisible = false;
+      this.viewerController.setBaseOpacity(0);
+
+      // Load segmentation as overlay on top of existing base volume
+      await this.viewerController.loadOverlay(overlayFile, 'red');
+
+      // Set overlay to full opacity since it's the only visible volume
+      this._overlaySliderValue = 1.0;
+      this.viewerController.setOverlayOpacity(1.0);
+      const opacitySlider = document.getElementById('overlayOpacity');
+      if (opacitySlider) opacitySlider.value = 1.0;
+      const opacityDisplay = document.getElementById('overlayOpacityValue');
+      if (opacityDisplay) opacityDisplay.textContent = '100%';
+      this.syncWindowControls();
     }
   }
 
