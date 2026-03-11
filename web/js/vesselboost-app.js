@@ -568,18 +568,9 @@ class VesselBoostApp {
 
   async skipBET() {
     if (this.inferenceExecutor.isRunning()) return;
-    // Remove BET result and restore viewer to current base volume
+    // Remove BET result and let onStepComplete('bet') restore the segmentation view
     this.inferenceExecutor.removeResult('bet');
     this.inferenceExecutor.skipBET();
-    // Reload the latest preprocessing base (N4 if available, else input)
-    const n4Result = this.inferenceExecutor.getResult('n4');
-    const baseFile = n4Result?.file || this.inputFile;
-    if (baseFile) {
-      await this.viewerController.loadBaseVolume(baseFile);
-      this.applyDefaultBaseColormap();
-      this.syncWindowControls();
-      this.applyAutoContrast();
-    }
   }
 
   async runDenoise() {
