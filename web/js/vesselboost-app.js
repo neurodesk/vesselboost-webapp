@@ -938,6 +938,16 @@ class VesselBoostApp {
     if (data.stage === 'segmentation') {
       const overlayControl = document.getElementById('overlayControl');
       if (overlayControl) overlayControl.classList.remove('hidden');
+
+      // If segmentation overlay is already visible (e.g. BET re-applied the mask),
+      // remove old overlay and reload with updated data
+      if (this._segmentationVisible && this.nv?.volumes?.length > 1) {
+        this.nv.removeVolumeByIndex(this.nv.volumes.length - 1);
+        const segResult = this.inferenceExecutor.getResult('segmentation');
+        if (segResult?.file) {
+          await this.viewerController.loadOverlay(segResult.file, 'red');
+        }
+      }
     }
   }
 
@@ -1039,7 +1049,9 @@ class VesselBoostApp {
     if (!file) return;
 
     await this.viewerController.loadBaseVolume(file);
+    this.applyDefaultBaseColormap();
     this.syncWindowControls();
+    this.applyAutoContrast();
 
     // Re-add segmentation overlay if it exists and is visible
     if (this._segmentationVisible) {

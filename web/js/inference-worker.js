@@ -43,6 +43,9 @@ let workerState = {
   rasSpacing: null,
   brainMask: null,
   denoisedData: null,
+  // Unmasked segmentation labels in RAS space (before brain mask / CC cleanup)
+  segLabelsRAS: null,
+  segMinComponentSize: 10,
   // Backups for skip-undo
   preN4Data: null,
   preBETMask: null,
@@ -63,6 +66,8 @@ function resetState() {
     rasSpacing: null,
     brainMask: null,
     denoisedData: null,
+    segLabelsRAS: null,
+    segMinComponentSize: 10,
     preN4Data: null,
     preBETMask: null,
     preDenoiseData: null
@@ -1147,6 +1152,55 @@ function stepN4() {
   postStepComplete('n4');
 }
 
+/**
+ * Re-apply brain mask to stored segmentation labels and re-emit the segmentation result.
+ * Called after BET completes when segmentation already exists.
+ */
+function reapplyBrainMaskToSegmentation() {
+  if (!workerState.segLabelsRAS) return;
+
+  // Start from the unmasked labels
+  const outputLabels = new Uint8Array(workerState.segLabelsRAS);
+
+  // Apply brain mask if present
+  if (workerState.brainMask) {
+    postLog('Applying brain mask to existing segmentation...');
+    let maskedOut = 0;
+    for (let i = 0; i < outputLabels.length; i++) {
+      if (outputLabels[i] && !workerState.brainMask[i]) {
+        outputLabels[i] = 0;
+        maskedOut++;
+      }
+    }
+    if (maskedOut > 0) {
+      postLog(`Brain mask removed ${maskedOut} vessel voxels outside brain`);
+    }
+  } else {
+    postLog('Removing brain mask from segmentation...');
+  }
+
+  // Re-run CC cleanup
+  const rasDims = workerState.rasDims;
+  const minComponentSize = workerState.segMinComponentSize;
+  const cleanedLabels = removeSmallComponents(outputLabels, rasDims, minComponentSize);
+
+  // Inverse orient
+  let finalLabels = cleanedLabels;
+  if (!workerState.isIdentity) {
+    finalLabels = inverseOrient(finalLabels, workerState.rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+
+  let finalVoxels = 0;
+  for (let i = 0; i < finalLabels.length; i++) {
+    if (finalLabels[i] > 0) finalVoxels++;
+  }
+  postLog(`Updated segmentation: ${finalVoxels} vessel voxels`);
+
+  // Re-emit segmentation
+  const outputNifti = createOutputNifti(finalLabels, workerState.origHeaderBytes, workerState.origDims);
+  postStageData('segmentation', outputNifti, 'Vessel segmentation');
+}
+
 function stepBET(params) {
   if (!workerState.rasData) {
     throw new Error('No volume loaded. Run Load first.');
@@ -1196,6 +1250,9 @@ function stepBET(params) {
   }
   const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
   postStageData('bet', betNifti, 'Brain extraction (BET)');
+
+  // Re-apply brain mask to existing segmentation if present
+  reapplyBrainMaskToSegmentation();
 
   postProgress(1.0, 'BET complete');
   postStepComplete('bet');
@@ -1353,6 +1410,9 @@ async function stepSynthStrip(params) {
   }
   const betNifti = createFloat32Nifti(maskedPreview, headerBytes, rasDims, rasSpacing);
   postStageData('bet', betNifti, `${modeLabel} brain extraction`);
+
+  // Re-apply brain mask to existing segmentation if present
+  reapplyBrainMaskToSegmentation();
 
   postProgress(1.0, `${modeLabel} complete`);
   postStepComplete('bet');
@@ -1572,6 +1632,10 @@ async function stepInference(params) {
     outputLabels = resampleLabelsNearest(outputLabels, processingDims, prePadDims);
   }
 
+  // Store unmasked labels so BET can re-apply mask later
+  workerState.segLabelsRAS = new Uint8Array(outputLabels);
+  workerState.segMinComponentSize = minComponentSize;
+
   // Apply brain mask BEFORE CC cleanup (same dimensions as rasDims)
   // This prevents the brain mask boundary from fragmenting connected vessel trees
   if (workerState.brainMask) {
@@ -1712,6 +1776,8 @@ self.onmessage = async (e) => {
       workerState.brainMask = workerState.preBETMask || null;
       workerState.preBETMask = null;
       postLog(workerState.brainMask ? 'BET undone — reverted to previous mask' : 'BET skipped — no brain mask');
+      // Re-apply updated mask (or no mask) to segmentation
+      reapplyBrainMaskToSegmentation();
       postStepComplete('bet');
       break;
 
