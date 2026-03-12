@@ -2,10 +2,12 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main]
   workflow_run:
     workflows: ["Release"]
     types: [completed]
+  repository_dispatch:
+    types: [staging-updated]
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
+      github.event_name == 'repository_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
@@ -61,13 +64,12 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
+      github.event_name == 'repository_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Check if staging branch exists
         id: check_staging
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if git ls-remote --heads "https://github.com/${{ github.repository }}" staging | grep -q staging; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
