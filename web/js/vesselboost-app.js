@@ -33,6 +33,9 @@ class VesselBoostApp {
     // State
     this.inputFile = null;
     this.currentResultTab = 'input';
+    this.currentRunningStep = null;
+    this.abortUICheckpoint = null;
+    this._inputVisible = true;
     this._overlaySliderValue = 0.5;
     this._segmentationVisible = true;
     this._lastLocationData = null;
@@ -68,7 +71,8 @@ class VesselBoostApp {
       onError: (msg) => this.onInferenceError(msg),
       onInitialized: () => this.onWorkerInitialized(),
       onStepComplete: (step) => this.onStepComplete(step),
-      onVolumeInfo: (info) => this.onVolumeInfo(info)
+      onVolumeInfo: (info) => this.onVolumeInfo(info),
+      onBrainMaskOverlay: (file) => { this._brainMaskOverlayFile = file; }
     });
 
     // Modals
@@ -155,6 +159,12 @@ class VesselBoostApp {
     const applyBET = document.getElementById('applyBETBtn');
     if (applyBET) applyBET.addEventListener('click', () => this.applyBrainMask());
 
+    const dilateBET = document.getElementById('dilateBETBtn');
+    if (dilateBET) dilateBET.addEventListener('click', () => this.dilateBrainMask());
+
+    const erodeBET = document.getElementById('erodeBETBtn');
+    if (erodeBET) erodeBET.addEventListener('click', () => this.erodeBrainMask());
+
     // BET method dropdown: toggle FI visibility
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
@@ -175,8 +185,13 @@ class VesselBoostApp {
     const runBtn = document.getElementById('runSegmentation');
     if (runBtn) runBtn.addEventListener('click', () => this.runSegmentation());
 
+    ['abortN4Btn', 'abortDenoiseBtn', 'abortInferenceBtn', 'abortBETBtn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.addEventListener('click', () => this.abortCurrentStep());
+    });
+
     const cancelBtn = document.getElementById('cancelButton');
-    if (cancelBtn) cancelBtn.addEventListener('click', () => this.cancelSegmentation());
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this.abortCurrentStep());
 
     const copyConsole = document.getElementById('copyConsole');
     if (copyConsole) copyConsole.addEventListener('click', () => this.console.copyToClipboard());
@@ -520,6 +535,7 @@ class VesselBoostApp {
   async onFileLoaded(file) {
     await this.resetForNewFile();
     this.inputFile = file;
+    this._inputVisible = true;
     await this.viewerController.loadBaseVolume(file);
     this.applyDefaultBaseColormap();
     this.syncWindowControls();
@@ -538,6 +554,9 @@ class VesselBoostApp {
 
     this.inputFile = null;
     this.currentResultTab = 'input';
+    this.currentRunningStep = null;
+    this.abortUICheckpoint = null;
+    this._inputVisible = true;
     this._segmentationVisible = true;
     this._overlaySliderValue = 0.5;
     this._lastLocationData = null;
@@ -552,10 +571,144 @@ class VesselBoostApp {
     this.updateViewerInfo(null);
   }
 
+  captureAbortUICheckpoint(step) {
+    const sectionEnabled = {};
+    const buttonsEnabled = {};
+
+    for (const pipelineStep of ['n4', 'denoise', 'inference', 'bet']) {
+      sectionEnabled[pipelineStep] = this.isStepEnabled(pipelineStep);
+      buttonsEnabled[pipelineStep] = this.areStepButtonsEnabled(pipelineStep);
+    }
+
+    const applyGroup = document.getElementById('applyBETGroup');
+    const applyBtn = document.getElementById('applyBETBtn');
+
+    return {
+      step,
+      sectionEnabled,
+      buttonsEnabled,
+      applyBETVisible: applyGroup ? !applyGroup.classList.contains('hidden') : false,
+      applyBETDisabled: applyBtn ? applyBtn.disabled : false,
+      currentResultTab: this.currentResultTab || 'input',
+      inputVisible: this._inputVisible,
+      segmentationVisible: this._segmentationVisible,
+      overlaySliderValue: this._overlaySliderValue
+    };
+  }
+
+  beginAbortableStep(step) {
+    this.currentRunningStep = step;
+    this.abortUICheckpoint = this.captureAbortUICheckpoint(step);
+    this.inferenceExecutor.captureCheckpoint(step);
+  }
+
+  async abortCurrentStep() {
+    if (!this.currentRunningStep || !this.inferenceExecutor.isRunning()) return;
+
+    const abortedStep = this.currentRunningStep;
+    const checkpoint = this.abortUICheckpoint;
+    const statusText = document.getElementById('statusText');
+    if (statusText) statusText.textContent = 'Aborting...';
+
+    this.resetAbortControls();
+
+    try {
+      const restoreResult = await this.inferenceExecutor.abortCurrentStep();
+      if (!restoreResult) return;
+      await this.restoreUIFromAbortCheckpoint(checkpoint, abortedStep);
+    } catch (error) {
+      this.onInferenceError(error?.message || String(error));
+    } finally {
+      this.currentRunningStep = null;
+      this.abortUICheckpoint = null;
+    }
+  }
+
+  async restoreUIFromAbortCheckpoint(checkpoint, abortedStep) {
+    this.progress.reset();
+    this.resetAbortControls();
+
+    for (const step of Config.PIPELINE_STEPS) {
+      this.updateStepBadge(step, this.inferenceExecutor.getStepStatus(step));
+      if (checkpoint?.sectionEnabled?.[step] !== undefined) {
+        this.setStepEnabled(step, checkpoint.sectionEnabled[step]);
+      }
+      if (checkpoint?.buttonsEnabled?.[step] !== undefined) {
+        this.setStepButtonsEnabled(step, checkpoint.buttonsEnabled[step]);
+      }
+    }
+
+    if (abortedStep) {
+      this.updateStepBadge(abortedStep, 'pending');
+      this.setStepButtonsEnabled(abortedStep, true);
+    }
+
+    const resultsSection = document.getElementById('resultsSection');
+    if (resultsSection) {
+      if (this.inferenceExecutor.getStageOrder().length > 0) {
+        resultsSection.classList.remove('hidden');
+        resultsSection.classList.remove('collapsed');
+      } else {
+        resultsSection.classList.add('hidden');
+        resultsSection.classList.add('collapsed');
+      }
+    }
+
+    const overlayControl = document.getElementById('overlayControl');
+    if (overlayControl) {
+      overlayControl.classList.toggle('hidden', !this.inferenceExecutor.getResult('segmentation'));
+    }
+
+    const applyGroup = document.getElementById('applyBETGroup');
+    if (applyGroup) {
+      applyGroup.classList.toggle('hidden', !checkpoint?.applyBETVisible);
+    }
+    const applyBtn = document.getElementById('applyBETBtn');
+    if (applyBtn) {
+      applyBtn.disabled = checkpoint?.applyBETDisabled ?? false;
+    }
+
+    this.currentResultTab = checkpoint?.currentResultTab || 'input';
+    this._segmentationVisible = checkpoint?.segmentationVisible ?? true;
+    this._overlaySliderValue = checkpoint?.overlaySliderValue ?? 0.5;
+
+    this.rebuildResultsList();
+
+    const targetStage = (this.currentResultTab === 'input' || this.inferenceExecutor.getResult(this.currentResultTab))
+      ? this.currentResultTab
+      : 'input';
+
+    if (this.inputFile && targetStage) {
+      await this.viewStage(targetStage);
+    }
+
+    this._inputVisible = checkpoint?.inputVisible ?? true;
+    this.viewerController.setBaseOpacity(this._inputVisible ? 1 : 0);
+
+    const opacitySlider = document.getElementById('overlayOpacity');
+    if (opacitySlider) {
+      opacitySlider.disabled = !this._segmentationVisible;
+      opacitySlider.value = String(this._overlaySliderValue);
+    }
+    const opacityDisplay = document.getElementById('overlayOpacityValue');
+    if (opacityDisplay) opacityDisplay.textContent = `${Math.round(this._overlaySliderValue * 100)}%`;
+
+    if (this._segmentationVisible) {
+      this.viewerController.setOverlayOpacity(this._overlaySliderValue);
+    } else {
+      this.viewerController.setOverlayOpacity(0);
+    }
+
+    const statusText = document.getElementById('statusText');
+    if (statusText) statusText.textContent = 'Ready';
+    this.updateViewerInfo(this._lastLocationData);
+  }
+
   // ==================== Pipeline Step Methods ====================
 
   async runN4() {
     if (this.inferenceExecutor.isRunning()) return;
+    this.beginAbortableStep('n4');
     this.setStepRunning('n4');
     this.inferenceExecutor.resetDownstream('n4');
     this.resetUIDownstream('n4');
@@ -569,6 +722,8 @@ class VesselBoostApp {
     this.inferenceExecutor.skipN4();
     if (this.inputFile) {
       await this.viewerController.loadBaseVolume(this.inputFile);
+      this.currentResultTab = 'input';
+      this._inputVisible = true;
       this.applyDefaultBaseColormap();
       this.syncWindowControls();
       this.applyAutoContrast();
@@ -581,6 +736,7 @@ class VesselBoostApp {
     const method = methodSelect ? methodSelect.value : 'bet';
     const betFiInput = document.getElementById('betFiInput');
     const fi = betFiInput ? parseFloat(betFiInput.value) : 0.5;
+    this.beginAbortableStep('bet');
     this.setStepRunning('bet');
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
     await this.inferenceExecutor.runBET(fi, method, modelBaseUrl);
@@ -600,10 +756,25 @@ class VesselBoostApp {
     await this.inferenceExecutor.applyBrainMask();
   }
 
+  async dilateBrainMask() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const dilateBtn = document.getElementById('dilateBETBtn');
+    if (dilateBtn) dilateBtn.disabled = true;
+    await this.inferenceExecutor.dilateBrainMask(1);
+  }
+
+  async erodeBrainMask() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const erodeBtn = document.getElementById('erodeBETBtn');
+    if (erodeBtn) erodeBtn.disabled = true;
+    await this.inferenceExecutor.erodeBrainMask(1);
+  }
+
   async runDenoise() {
     if (this.inferenceExecutor.isRunning()) return;
     const methodSelect = document.getElementById('denoiseMethodSelect');
     const method = methodSelect ? methodSelect.value : 'bilateral';
+    this.beginAbortableStep('denoise');
     this.setStepRunning('denoise');
     this.inferenceExecutor.resetDownstream('denoise');
     this.resetUIDownstream('denoise');
@@ -620,6 +791,8 @@ class VesselBoostApp {
     const baseFile = n4Result?.file || this.inputFile;
     if (baseFile) {
       await this.viewerController.loadBaseVolume(baseFile);
+      this.currentResultTab = n4Result?.file ? 'n4' : 'input';
+      this._inputVisible = true;
       this.applyDefaultBaseColormap();
       this.syncWindowControls();
       this.applyAutoContrast();
@@ -644,9 +817,7 @@ class VesselBoostApp {
     const selectedModel = Config.MODELS.find(m => m.id === selectedModelId) || Config.MODELS[0];
 
     const modelBaseUrl = new URL(Config.MODEL_BASE_URL, window.location.href).href;
-
-    const cancelBtn = document.getElementById('cancelButton');
-    if (cancelBtn) cancelBtn.disabled = false;
+    this.beginAbortableStep('inference');
 
     // Clear previous results
     this.inferenceExecutor.clearResults();
@@ -663,24 +834,83 @@ class VesselBoostApp {
     });
   }
 
-  cancelSegmentation() {
-    this.inferenceExecutor.cancel();
-    const cancelBtn = document.getElementById('cancelButton');
-    if (cancelBtn) cancelBtn.disabled = true;
-
-    // Reset running step badges back to pending
-    for (const step of Config.PIPELINE_STEPS) {
-      if (this.inferenceExecutor.getStepStatus(step) === 'running') {
-        this.updateStepBadge(step, 'pending');
-      }
-    }
-  }
-
   // ==================== Step UI Management ====================
 
   setStepRunning(step) {
     this.updateStepBadge(step, 'running');
     this.setStepButtonsEnabled(step, false);
+    this.setStepAbortVisible(step, true);
+    if (this.currentRunningStep === step) {
+      const cancelBtn = document.getElementById('cancelButton');
+      if (cancelBtn) cancelBtn.disabled = false;
+    }
+  }
+
+  getStepSectionId(step) {
+    const sectionMap = {
+      'load': null,
+      'n4': 'stepN4Section',
+      'bet': 'stepBETSection',
+      'denoise': 'stepDenoiseSection',
+      'inference': 'stepInferenceSection'
+    };
+    return sectionMap[step] || null;
+  }
+
+  getStepButtonIds(step) {
+    const buttonMap = {
+      'n4': ['runN4Btn', 'skipN4Btn'],
+      'bet': ['runBETBtn', 'skipBETBtn'],
+      'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
+      'inference': ['runSegmentation']
+    };
+    return buttonMap[step] || [];
+  }
+
+  getStepAbortButtonId(step) {
+    const abortButtonMap = {
+      'n4': 'abortN4Btn',
+      'bet': 'abortBETBtn',
+      'denoise': 'abortDenoiseBtn',
+      'inference': 'abortInferenceBtn'
+    };
+    return abortButtonMap[step] || null;
+  }
+
+  isStepEnabled(step) {
+    const sectionId = this.getStepSectionId(step);
+    if (!sectionId) return false;
+    const section = document.getElementById(sectionId);
+    return !!section && !section.classList.contains('step-disabled');
+  }
+
+  areStepButtonsEnabled(step) {
+    const buttonIds = this.getStepButtonIds(step);
+    if (buttonIds.length === 0) return false;
+    return buttonIds.every(id => {
+      const btn = document.getElementById(id);
+      return !!btn && !btn.disabled;
+    });
+  }
+
+  setStepAbortVisible(step, visible) {
+    const abortButtonId = this.getStepAbortButtonId(step);
+    if (!abortButtonId) return;
+
+    const abortBtn = document.getElementById(abortButtonId);
+    if (!abortBtn) return;
+
+    abortBtn.classList.toggle('hidden', !visible);
+    abortBtn.disabled = !visible;
+  }
+
+  resetAbortControls() {
+    for (const step of ['n4', 'denoise', 'inference', 'bet']) {
+      this.setStepAbortVisible(step, false);
+    }
+
+    const cancelBtn = document.getElementById('cancelButton');
+    if (cancelBtn) cancelBtn.disabled = true;
   }
 
   async resetAllSteps() {
@@ -689,11 +919,15 @@ class VesselBoostApp {
       await this.inferenceExecutor.resetWorkerState();
     }
 
+    this.currentRunningStep = null;
+    this.abortUICheckpoint = null;
+
     // Reset all UI step sections
     for (const step of Config.PIPELINE_STEPS) {
       this.updateStepBadge(step, '');
       this.setStepEnabled(step, false);
       this.setStepButtonsEnabled(step, false);
+      this.setStepAbortVisible(step, false);
     }
 
     // Reset results
@@ -708,14 +942,17 @@ class VesselBoostApp {
 
     const overlayControl = document.getElementById('overlayControl');
     if (overlayControl) overlayControl.classList.add('hidden');
+
+    const applyGroup = document.getElementById('applyBETGroup');
+    if (applyGroup) applyGroup.classList.add('hidden');
+
+    this.resetAbortControls();
   }
 
   resetStatusDisplay() {
     const statusText = document.getElementById('statusText');
     if (statusText) statusText.textContent = 'Ready';
-
-    const cancelBtn = document.getElementById('cancelButton');
-    if (cancelBtn) cancelBtn.disabled = true;
+    this.resetAbortControls();
   }
 
   resetProcessingInputs() {
@@ -764,6 +1001,9 @@ class VesselBoostApp {
     const overlayControl = document.getElementById('overlayControl');
     if (overlayControl) overlayControl.classList.add('hidden');
 
+    const applyGroup = document.getElementById('applyBETGroup');
+    if (applyGroup) applyGroup.classList.add('hidden');
+
     const opacitySlider = document.getElementById('overlayOpacity');
     if (opacitySlider) {
       opacitySlider.disabled = false;
@@ -805,6 +1045,13 @@ class VesselBoostApp {
     const status = this.inferenceExecutor.getStepStatus(step);
     this.updateStepBadge(step, status);
     this.setStepButtonsEnabled(step, true);
+    this.setStepAbortVisible(step, false);
+    this.resetAbortControls();
+
+    if (this.currentRunningStep === step) {
+      this.currentRunningStep = null;
+      this.abortUICheckpoint = null;
+    }
 
     const statusText = document.getElementById('statusText');
     if (statusText) statusText.textContent = 'Ready';
@@ -850,17 +1097,34 @@ class VesselBoostApp {
             this.syncWindowControls();
           }
         } else {
-          // Show brain extraction result and reveal the apply button
+          // Show brain extraction result with segmentation overlay
           const betResult = this.inferenceExecutor.getResult('bet');
+          const segResult = this.inferenceExecutor.getResult('segmentation');
           if (betResult?.file) {
             await this.viewerController.loadBaseVolume(betResult.file);
+            this.currentResultTab = 'bet';
+            this._inputVisible = true;
             this.applyDefaultBaseColormap();
             this.syncWindowControls();
             this.applyAutoContrast();
+            // Overlay segmentation on the brain-extracted image
+            if (segResult?.file) {
+              await this.viewerController.loadOverlay(segResult.file, 'red', 0.5);
+              this._segmentationVisible = true;
+              this._overlaySliderValue = 0.5;
+              const opacitySlider = document.getElementById('overlayOpacity');
+              if (opacitySlider) opacitySlider.value = 0.5;
+              const opacityDisplay = document.getElementById('overlayOpacityValue');
+              if (opacityDisplay) opacityDisplay.textContent = '50%';
+            }
           }
           if (applyGroup) applyGroup.classList.remove('hidden');
           const applyBtn = document.getElementById('applyBETBtn');
           if (applyBtn) applyBtn.disabled = false;
+          const dilateBtn = document.getElementById('dilateBETBtn');
+          if (dilateBtn) dilateBtn.disabled = false;
+          const erodeBtn = document.getElementById('erodeBETBtn');
+          if (erodeBtn) erodeBtn.disabled = false;
         }
         this.rebuildResultsList();
         break;
@@ -885,6 +1149,64 @@ class VesselBoostApp {
         }
         const applyGroupDone = document.getElementById('applyBETGroup');
         if (applyGroupDone) applyGroupDone.classList.add('hidden');
+        break;
+      }
+      case 'dilate-brain-mask': {
+        // Refresh the BET preview with dilated mask + segmentation overlay
+        const betResult = this.inferenceExecutor.getResult('bet');
+        const segResult = this.inferenceExecutor.getResult('segmentation');
+        if (betResult?.file) {
+          await this.viewerController.loadBaseVolume(betResult.file);
+          this.currentResultTab = 'bet';
+          this._inputVisible = true;
+          this.applyDefaultBaseColormap();
+          this.syncWindowControls();
+          this.applyAutoContrast();
+          if (segResult?.file) {
+            await this.viewerController.loadOverlay(segResult.file, 'red', 0.5);
+            this._segmentationVisible = true;
+            this._overlaySliderValue = 0.5;
+            const opacitySlider = document.getElementById('overlayOpacity');
+            if (opacitySlider) opacitySlider.value = 0.5;
+            const opacityDisplay = document.getElementById('overlayOpacityValue');
+            if (opacityDisplay) opacityDisplay.textContent = '50%';
+          }
+        }
+        const dilateBtn = document.getElementById('dilateBETBtn');
+        if (dilateBtn) dilateBtn.disabled = false;
+        const erodeBtn = document.getElementById('erodeBETBtn');
+        if (erodeBtn) erodeBtn.disabled = false;
+        const applyBtn = document.getElementById('applyBETBtn');
+        if (applyBtn) applyBtn.disabled = false;
+        break;
+      }
+      case 'erode-brain-mask': {
+        // Refresh the BET preview with eroded mask + segmentation overlay
+        const betResult = this.inferenceExecutor.getResult('bet');
+        const segResult = this.inferenceExecutor.getResult('segmentation');
+        if (betResult?.file) {
+          await this.viewerController.loadBaseVolume(betResult.file);
+          this.currentResultTab = 'bet';
+          this._inputVisible = true;
+          this.applyDefaultBaseColormap();
+          this.syncWindowControls();
+          this.applyAutoContrast();
+          if (segResult?.file) {
+            await this.viewerController.loadOverlay(segResult.file, 'red', 0.5);
+            this._segmentationVisible = true;
+            this._overlaySliderValue = 0.5;
+            const opacitySlider = document.getElementById('overlayOpacity');
+            if (opacitySlider) opacitySlider.value = 0.5;
+            const opacityDisplay = document.getElementById('overlayOpacityValue');
+            if (opacityDisplay) opacityDisplay.textContent = '50%';
+          }
+        }
+        const dilateBtnE = document.getElementById('dilateBETBtn');
+        if (dilateBtnE) dilateBtnE.disabled = false;
+        const erodeBtnE = document.getElementById('erodeBETBtn');
+        if (erodeBtnE) erodeBtnE.disabled = false;
+        const applyBtnE = document.getElementById('applyBETBtn');
+        if (applyBtnE) applyBtnE.disabled = false;
         break;
       }
     }
@@ -935,14 +1257,7 @@ class VesselBoostApp {
   }
 
   setStepEnabled(step, enabled) {
-    const sectionMap = {
-      'load': null, // no separate section for load
-      'n4': 'stepN4Section',
-      'bet': 'stepBETSection',
-      'denoise': 'stepDenoiseSection',
-      'inference': 'stepInferenceSection'
-    };
-    const sectionId = sectionMap[step];
+    const sectionId = this.getStepSectionId(step);
     if (!sectionId) return;
 
     const section = document.getElementById(sectionId);
@@ -956,13 +1271,7 @@ class VesselBoostApp {
   }
 
   setStepButtonsEnabled(step, enabled) {
-    const buttonMap = {
-      'n4': ['runN4Btn', 'skipN4Btn'],
-      'bet': ['runBETBtn', 'skipBETBtn'],
-      'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
-      'inference': ['runSegmentation']
-    };
-    const buttons = buttonMap[step];
+    const buttons = this.getStepButtonIds(step);
     if (!buttons) return;
 
     for (const id of buttons) {
@@ -999,6 +1308,8 @@ class VesselBoostApp {
       const result = this.inferenceExecutor.getResult(data.stage);
       if (result?.file) {
         await this.viewerController.loadBaseVolume(result.file);
+        this.currentResultTab = data.stage;
+        this._inputVisible = true;
         this.applyDefaultBaseColormap();
         this.syncWindowControls();
         this.applyAutoContrast();
@@ -1081,6 +1392,8 @@ class VesselBoostApp {
     if (!file) return;
 
     await this.viewerController.loadBaseVolume(file);
+    this.currentResultTab = stage;
+    this._inputVisible = true;
     this.applyDefaultBaseColormap();
     this.syncWindowControls();
     this.applyAutoContrast();
@@ -1140,9 +1453,10 @@ class VesselBoostApp {
   }
 
   async onInferenceComplete() {
-    const cancelBtn = document.getElementById('cancelButton');
     const statusText = document.getElementById('statusText');
-    if (cancelBtn) cancelBtn.disabled = true;
+    this.resetAbortControls();
+    this.currentRunningStep = null;
+    this.abortUICheckpoint = null;
     if (statusText) statusText.textContent = 'Ready';
 
     // Show segmentation overlay only (hide base volume to avoid flash)
@@ -1168,9 +1482,10 @@ class VesselBoostApp {
   }
 
   onInferenceError(msg) {
-    const cancelBtn = document.getElementById('cancelButton');
     const statusText = document.getElementById('statusText');
-    if (cancelBtn) cancelBtn.disabled = true;
+    this.resetAbortControls();
+    this.currentRunningStep = null;
+    this.abortUICheckpoint = null;
     if (statusText) statusText.textContent = 'Error';
 
     // Reset any running badges back
@@ -1193,6 +1508,8 @@ class VesselBoostApp {
   clearResults() {
     this.inferenceExecutor.clearResults();
     this.disableAllResultTabs();
+    this.currentResultTab = 'input';
+    this._inputVisible = true;
 
     const resultsSection = document.getElementById('resultsSection');
     if (resultsSection) {
@@ -1202,6 +1519,9 @@ class VesselBoostApp {
 
     const overlayControl = document.getElementById('overlayControl');
     if (overlayControl) overlayControl.classList.add('hidden');
+
+    const applyGroup = document.getElementById('applyBETGroup');
+    if (applyGroup) applyGroup.classList.add('hidden');
 
     const opacitySlider = document.getElementById('overlayOpacity');
     if (opacitySlider) {

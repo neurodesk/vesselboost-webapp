@@ -1,6 +1,8 @@
 name: Deploy to GitHub Pages
 
 on:
+  push:
+    branches: [main, staging]
   workflow_run:
     workflows: ["Release"]
     types: [completed]
@@ -16,14 +18,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build-production:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,11 +50,101 @@ jobs:
       - name: Check JS syntax
         run: npm install --ignore-scripts && npm run lint
 
+      - name: Upload production artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-build
+          path: web
+          retention-days: 1
+
+  build-staging:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if staging branch exists
+        id: check_staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-remote --heads "https://github.com/${{ github.repository }}" staging | grep -q staging; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Staging branch does not exist yet — skipping staging build"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check_staging.outputs.exists == 'true'
+        with:
+          ref: staging
+
+      - name: Install Rust and wasm-pack
+        if: steps.check_staging.outputs.exists == 'true'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack
+
+      - name: Download ONNX Runtime WASM files and build preprocessing
+        if: steps.check_staging.outputs.exists == 'true'
+        run: |
+          source "$HOME/.cargo/env"
+          cd web
+          bash setup.sh
+
+      - name: Setup Node.js
+        if: steps.check_staging.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check JS syntax
+        if: steps.check_staging.outputs.exists == 'true'
+        run: npm install --ignore-scripts && npm run lint
+
+      - name: Upload staging artifact
+        if: steps.check_staging.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-build
+          path: web
+          retention-days: 1
+
+  deploy:
+    needs: [build-production, build-staging]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download production build
+        uses: actions/download-artifact@v4
+        with:
+          name: production-build
+          path: deploy-root
+
+      - name: Download staging build
+        id: download_staging
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: staging-build
+          path: deploy-root/staging
+
+      - name: Inject staging banner
+        if: steps.download_staging.outcome == 'success'
+        run: |
+          sed -i 's|<body>|<body><div style="background:#f59e0b;color:#000;text-align:center;padding:6px;font-size:13px;font-weight:600;z-index:9999;position:relative;">⚠ STAGING — This is a preview version. <a href="../" style="color:#000;text-decoration:underline;">Go to production</a></div>|' deploy-root/staging/index.html
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          path: deploy-root
 
       - id: deployment
         uses: actions/deploy-pages@v4

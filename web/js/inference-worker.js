@@ -107,6 +107,62 @@ function postVolumeInfo(info) {
   self.postMessage({ type: 'volume-info', ...info });
 }
 
+function collectTransferables(value, transferables, seen = new Set()) {
+  if (!value || typeof value !== 'object') return;
+
+  if (value instanceof ArrayBuffer) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      transferables.push(value);
+    }
+    return;
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    collectTransferables(value.buffer, transferables, seen);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectTransferables(item, transferables, seen);
+    return;
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    collectTransferables(nestedValue, transferables, seen);
+  }
+}
+
+function postStateArtifact(artifact, payload) {
+  const transferables = [];
+  collectTransferables(payload, transferables);
+  self.postMessage({ type: 'state-artifact', artifact, payload }, transferables);
+}
+
+function emitN4StateArtifact() {
+  const preN4Data = workerState.preN4Data ? new Float32Array(workerState.preN4Data).buffer : null;
+  postStateArtifact('n4State', { preN4Data });
+}
+
+function emitBETStateArtifact() {
+  const brainMask = workerState.brainMask ? new Uint8Array(workerState.brainMask).buffer : null;
+  const preBETMask = workerState.preBETMask ? new Uint8Array(workerState.preBETMask).buffer : null;
+  postStateArtifact('betState', { brainMask, preBETMask });
+}
+
+function emitDenoiseStateArtifact() {
+  const preDenoiseData = workerState.preDenoiseData ? new Float32Array(workerState.preDenoiseData).buffer : null;
+  postStateArtifact('denoiseState', { preDenoiseData });
+}
+
+function emitSegmentationStateArtifact() {
+  const segLabelsRAS = workerState.segLabelsRAS ? new Uint8Array(workerState.segLabelsRAS).buffer : null;
+  postStateArtifact('segmentationState', {
+    segLabelsRAS,
+    segMinComponentSize: workerState.segMinComponentSize ?? 10
+  });
+}
+
 // ==================== NIfTI Parsing ====================
 
 function decompressIfNeeded(data) {
@@ -1030,20 +1086,27 @@ function getOptimalWasmThreads() {
 
 // ==================== Step Functions ====================
 
-function stepLoad(inputData) {
-  postLog('Parsing input volume...');
-  postProgress(0.02, 'Reading NIfTI...');
+function loadStateFromInput(inputData, { emitUpdates = false } = {}) {
+  if (emitUpdates) {
+    postLog('Parsing input volume...');
+    postProgress(0.02, 'Reading NIfTI...');
+  }
+
   const { imageData, dims, voxelSize, headerBytes, affine } = parseNiftiInput(inputData);
   const [nx, ny, nz] = dims;
-  postLog(`Volume: ${nx}x${ny}x${nz}, spacing: ${voxelSize.map(v => v.toFixed(3)).join('x')}mm`);
+  if (emitUpdates) {
+    postLog(`Volume: ${nx}x${ny}x${nz}, spacing: ${voxelSize.map(v => v.toFixed(3)).join('x')}mm`);
+  }
 
   workerState.origDims = [...dims];
   workerState.affine = affine;
   workerState.headerBytes = headerBytes;
 
   // Orient to RAS
-  postProgress(0.04, 'Orienting to RAS...');
-  postLog('Orienting to RAS...');
+  if (emitUpdates) {
+    postProgress(0.04, 'Orienting to RAS...');
+    postLog('Orienting to RAS...');
+  }
   const { perm, flip } = getOrientationTransform(affine);
   const isIdentity = perm[0] === 0 && perm[1] === 1 && perm[2] === 2 && !flip[0] && !flip[1] && !flip[2];
 
@@ -1093,11 +1156,17 @@ function stepLoad(inputData) {
     hdrView.setFloat32(324, origin[2], true);
     hdrView.setInt16(252, 0, true);
   }
-  postLog(`RAS dims: ${workerState.rasDims.join('x')}`);
+  if (emitUpdates) {
+    postLog(`RAS dims: ${workerState.rasDims.join('x')}`);
+  }
 
   // Clear downstream state
   workerState.brainMask = null;
+  workerState.preBETMask = null;
   workerState.denoisedData = null;
+  workerState.preDenoiseData = null;
+  workerState.segLabelsRAS = null;
+  workerState.segMinComponentSize = 10;
 
   // Post volume info for UI
   postVolumeInfo({
@@ -1105,9 +1174,49 @@ function stepLoad(inputData) {
     rasSpacing: [...workerState.rasSpacing],
     totalSlices: workerState.rasDims[2]
   });
+}
+
+function stepLoad(inputData) {
+  loadStateFromInput(inputData, { emitUpdates: true });
 
   postProgress(1.0, 'Volume loaded');
   postStepComplete('load');
+}
+
+async function restoreWorkerState(data) {
+  resetState();
+  loadStateFromInput(data.inputData, { emitUpdates: false });
+
+  if (data.n4ResultData) {
+    const restoredN4 = parseNiftiInput(data.n4ResultData);
+    workerState.rasData = restoredN4.imageData;
+  }
+
+  if (data.denoiseResultData) {
+    const restoredDenoise = parseNiftiInput(data.denoiseResultData);
+    workerState.denoisedData = restoredDenoise.imageData;
+  }
+
+  const hiddenArtifacts = data.hiddenArtifacts || {};
+  workerState.preN4Data = hiddenArtifacts.n4State?.preN4Data
+    ? new Float32Array(hiddenArtifacts.n4State.preN4Data)
+    : null;
+  workerState.brainMask = hiddenArtifacts.betState?.brainMask
+    ? new Uint8Array(hiddenArtifacts.betState.brainMask)
+    : null;
+  workerState.preBETMask = hiddenArtifacts.betState?.preBETMask
+    ? new Uint8Array(hiddenArtifacts.betState.preBETMask)
+    : null;
+  workerState.preDenoiseData = hiddenArtifacts.denoiseState?.preDenoiseData
+    ? new Float32Array(hiddenArtifacts.denoiseState.preDenoiseData)
+    : null;
+  workerState.segLabelsRAS = hiddenArtifacts.segmentationState?.segLabelsRAS
+    ? new Uint8Array(hiddenArtifacts.segmentationState.segLabelsRAS)
+    : null;
+  workerState.segMinComponentSize = hiddenArtifacts.segmentationState?.segMinComponentSize ?? 10;
+
+  postLog('Worker state restored');
+  self.postMessage({ type: 'state-restored' });
 }
 
 function stepN4() {
@@ -1167,7 +1276,16 @@ function stepN4() {
 
   // Clear downstream state (BET + downstream invalidated)
   workerState.brainMask = null;
+  workerState.preBETMask = null;
   workerState.denoisedData = null;
+  workerState.preDenoiseData = null;
+  workerState.segLabelsRAS = null;
+  workerState.segMinComponentSize = 10;
+
+  emitN4StateArtifact();
+  emitBETStateArtifact();
+  emitDenoiseStateArtifact();
+  emitSegmentationStateArtifact();
 
   postProgress(1.0, 'N4 complete');
   postStepComplete('n4');
@@ -1177,6 +1295,81 @@ function stepN4() {
  * Re-apply brain mask to stored segmentation labels and re-emit the segmentation result.
  * Called after BET completes when segmentation already exists.
  */
+function emitBrainMaskOverlay() {
+  if (!workerState.brainMask) return;
+  const mask = workerState.brainMask;
+  let maskOrig = mask;
+  if (!workerState.isIdentity) {
+    maskOrig = inverseOrient(new Uint8Array(mask), workerState.rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+  const maskNifti = createOutputNifti(maskOrig, workerState.origHeaderBytes, workerState.origDims);
+  self.postMessage(
+    { type: 'brain-mask-overlay', niftiData: maskNifti },
+    [maskNifti]
+  );
+}
+
+function dilateBrainMask3D(mask, dims) {
+  const [nx, ny, nz] = dims;
+  const out = new Uint8Array(mask);
+  // 6-connected dilation (faces only)
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        if (mask[x + y * nx + z * nx * ny]) continue;
+        if ((x > 0 && mask[(x-1) + y * nx + z * nx * ny]) ||
+            (x < nx-1 && mask[(x+1) + y * nx + z * nx * ny]) ||
+            (y > 0 && mask[x + (y-1) * nx + z * nx * ny]) ||
+            (y < ny-1 && mask[x + (y+1) * nx + z * nx * ny]) ||
+            (z > 0 && mask[x + y * nx + (z-1) * nx * ny]) ||
+            (z < nz-1 && mask[x + y * nx + (z+1) * nx * ny])) {
+          out[x + y * nx + z * nx * ny] = 1;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function erodeBrainMask3D(mask, dims) {
+  const [nx, ny, nz] = dims;
+  const out = new Uint8Array(mask);
+  // 6-connected erosion: a voxel is removed if any neighbor is background
+  for (let z = 0; z < nz; z++) {
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; x++) {
+        if (!mask[x + y * nx + z * nx * ny]) continue;
+        if (x === 0 || x === nx-1 || y === 0 || y === ny-1 || z === 0 || z === nz-1 ||
+            !mask[(x-1) + y * nx + z * nx * ny] ||
+            !mask[(x+1) + y * nx + z * nx * ny] ||
+            !mask[x + (y-1) * nx + z * nx * ny] ||
+            !mask[x + (y+1) * nx + z * nx * ny] ||
+            !mask[x + y * nx + (z-1) * nx * ny] ||
+            !mask[x + y * nx + (z+1) * nx * ny]) {
+          out[x + y * nx + z * nx * ny] = 0;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function reemitBETPreview(mask, label) {
+  const { rasData, rasDims } = workerState;
+  const maskedPreview = new Float32Array(rasData.length);
+  for (let i = 0; i < rasData.length; i++) {
+    maskedPreview[i] = mask[i] ? rasData[i] : 0;
+  }
+  let betPreview = maskedPreview;
+  if (!workerState.isIdentity) {
+    betPreview = inverseOrientFloat32(maskedPreview, rasDims, workerState.perm, workerState.flip, workerState.origDims);
+  }
+  const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
+  postStageData('bet', betNifti, label);
+  emitBrainMaskOverlay();
+  emitBETStateArtifact();
+}
+
 function reapplyBrainMaskToSegmentation() {
   if (!workerState.segLabelsRAS) return;
 
@@ -1260,21 +1453,14 @@ function stepBET(params) {
 
   // Save previous mask for skip-undo (null if no previous mask)
   workerState.preBETMask = workerState.brainMask;
-  workerState.brainMask = brainMask;
+
+  // Auto-dilate by 1 voxel to ensure brain boundary vessels are included
+  postLog('Auto-dilating brain mask by 1 voxel...');
+  workerState.brainMask = dilateBrainMask3D(brainMask, rasDims);
 
   // BET does NOT modify rasData or invalidate downstream - mask is independent
 
-  // Post masked preview in original input space (so it aligns with segmentation)
-  const maskedPreview = new Float32Array(rasData.length);
-  for (let i = 0; i < rasData.length; i++) {
-    maskedPreview[i] = brainMask[i] ? rasData[i] : 0;
-  }
-  let betPreview = maskedPreview;
-  if (!workerState.isIdentity) {
-    betPreview = inverseOrientFloat32(maskedPreview, rasDims, workerState.perm, workerState.flip, workerState.origDims);
-  }
-  const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
-  postStageData('bet', betNifti, 'Brain extraction (BET)');
+  reemitBETPreview(workerState.brainMask, 'Brain extraction (BET)');
 
   postProgress(1.0, 'BET complete');
   postStepComplete('bet');
@@ -1566,19 +1752,13 @@ async function stepSynthStrip(params) {
 
   // 10. Store brain mask (save previous for skip-undo)
   workerState.preBETMask = workerState.brainMask;
-  workerState.brainMask = finalMask;
 
-  // 11. Post masked preview in original input space (so it aligns with segmentation)
-  const maskedPreview = new Float32Array(rasData.length);
-  for (let i = 0; i < rasData.length; i++) {
-    maskedPreview[i] = finalMask[i] ? rasData[i] : 0;
-  }
-  let betPreview = maskedPreview;
-  if (!workerState.isIdentity) {
-    betPreview = inverseOrientFloat32(maskedPreview, rasDims, workerState.perm, workerState.flip, workerState.origDims);
-  }
-  const betNifti = createFloat32Nifti(betPreview, workerState.origHeaderBytes, workerState.origDims);
-  postStageData('bet', betNifti, `${modeLabel} brain extraction`);
+  // Auto-dilate by 1 voxel to ensure brain boundary vessels are included
+  postLog('Auto-dilating brain mask by 1 voxel...');
+  workerState.brainMask = dilateBrainMask3D(finalMask, rasDims);
+
+  // 11. Post masked preview
+  reemitBETPreview(workerState.brainMask, `${modeLabel} brain extraction`);
 
   postProgress(1.0, `${modeLabel} complete`);
   postStepComplete('bet');
@@ -1628,6 +1808,8 @@ function stepDenoise(params) {
   }
 
   workerState.denoisedData = denoised;
+  workerState.segLabelsRAS = null;
+  workerState.segMinComponentSize = 10;
   postLog('Denoising complete');
 
   const nlmNifti = createFloat32Nifti(
@@ -1637,6 +1819,9 @@ function stepDenoise(params) {
     rasSpacing
   );
   postStageData('nlm', nlmNifti, `Denoising (${methodLabel})`);
+
+  emitDenoiseStateArtifact();
+  emitSegmentationStateArtifact();
 
   postProgress(1.0, 'Denoising complete');
   postStepComplete('denoise');
@@ -1801,6 +1986,7 @@ async function stepInference(params) {
   // Store unmasked labels so BET can re-apply mask later
   workerState.segLabelsRAS = new Uint8Array(outputLabels);
   workerState.segMinComponentSize = minComponentSize;
+  emitSegmentationStateArtifact();
 
   // Apply brain mask BEFORE CC cleanup (same dimensions as rasDims)
   // This prevents the brain mask boundary from fragmenting connected vessel trees
@@ -1930,11 +2116,19 @@ self.onmessage = async (e) => {
         workerState.rasData = workerState.preN4Data;
         workerState.preN4Data = null;
         workerState.brainMask = null;
+        workerState.preBETMask = null;
         workerState.denoisedData = null;
+        workerState.preDenoiseData = null;
+        workerState.segLabelsRAS = null;
+        workerState.segMinComponentSize = 10;
         postLog('N4 undone — reverted to original data');
       } else {
         postLog('N4 skipped');
       }
+      emitN4StateArtifact();
+      emitBETStateArtifact();
+      emitDenoiseStateArtifact();
+      emitSegmentationStateArtifact();
       postStepComplete('n4');
       break;
 
@@ -1944,6 +2138,7 @@ self.onmessage = async (e) => {
       postLog(workerState.brainMask ? 'BET undone — reverted to previous mask' : 'BET skipped — no brain mask');
       // Re-apply updated mask (or no mask) to segmentation
       reapplyBrainMaskToSegmentation();
+      emitBETStateArtifact();
       postStepComplete('bet');
       break;
 
@@ -1952,10 +2147,58 @@ self.onmessage = async (e) => {
       postStepComplete('apply-brain-mask');
       break;
 
+    case 'dilate-brain-mask': {
+      if (!workerState.brainMask) {
+        postError('No brain mask to dilate');
+        break;
+      }
+      const dilateIter = (data && data.iterations) || 1;
+      postLog(`Dilating brain mask (${dilateIter} iteration${dilateIter > 1 ? 's' : ''})...`);
+      let dilated = workerState.brainMask;
+      for (let i = 0; i < dilateIter; i++) {
+        dilated = dilateBrainMask3D(dilated, workerState.rasDims);
+      }
+      workerState.brainMask = dilated;
+      let dilCount = 0;
+      for (let j = 0; j < dilated.length; j++) {
+        if (dilated[j]) dilCount++;
+      }
+      postLog(`Dilated brain mask: ${dilCount} voxels (${(100 * dilCount / dilated.length).toFixed(1)}% coverage)`);
+      reemitBETPreview(dilated, 'Brain extraction (dilated)');
+      postStepComplete('dilate-brain-mask');
+      break;
+    }
+
+    case 'erode-brain-mask': {
+      if (!workerState.brainMask) {
+        postError('No brain mask to erode');
+        break;
+      }
+      const erodeIter = (data && data.iterations) || 1;
+      postLog(`Eroding brain mask (${erodeIter} iteration${erodeIter > 1 ? 's' : ''})...`);
+      let eroded = workerState.brainMask;
+      for (let i = 0; i < erodeIter; i++) {
+        eroded = erodeBrainMask3D(eroded, workerState.rasDims);
+      }
+      workerState.brainMask = eroded;
+      let eroCount = 0;
+      for (let j = 0; j < eroded.length; j++) {
+        if (eroded[j]) eroCount++;
+      }
+      postLog(`Eroded brain mask: ${eroCount} voxels (${(100 * eroCount / eroded.length).toFixed(1)}% coverage)`);
+      reemitBETPreview(eroded, 'Brain extraction (eroded)');
+      postStepComplete('erode-brain-mask');
+      break;
+    }
+
     case 'skip-denoise':
       workerState.denoisedData = workerState.preDenoiseData || null;
       workerState.preDenoiseData = null;
+      workerState.segLabelsRAS = null;
+      workerState.segMinComponentSize = 10;
       postLog(workerState.denoisedData ? 'Denoising undone — reverted to previous data' : 'Denoising skipped');
+      emitDenoiseStateArtifact();
+      emitSegmentationStateArtifact();
       postStepComplete('denoise');
       break;
 
@@ -1971,6 +2214,15 @@ self.onmessage = async (e) => {
     case 'reset-state':
       resetState();
       postLog('Worker state reset');
+      break;
+
+    case 'restore-state':
+      try {
+        await restoreWorkerState(data || {});
+      } catch (error) {
+        console.error('Restore error:', error);
+        postError(error?.message || String(error));
+      }
       break;
 
     // Legacy support for old 'run' message

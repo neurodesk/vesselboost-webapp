@@ -253,8 +253,8 @@ input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .step-description { font-size: 0.75rem; color: var(--color-text-dim); margin-bottom: var(--space-sm); line-height: 1.4; }
 
-.step-buttons { display: flex; gap: var(--space-sm); margin-top: var(--space-sm); }
-.step-buttons .btn { flex: 1; }
+.step-buttons { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-sm); }
+.step-buttons .btn { flex: 1 1 120px; min-width: 0; }
 
 .step-badge { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 8px; margin-left: auto; line-height: 1.5; }
 .step-badge:empty { display: none; }

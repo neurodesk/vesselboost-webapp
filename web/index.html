@@ -73,6 +73,7 @@
           <div class="step-buttons">
             <button class="btn btn-primary btn-sm" id="runN4Btn" disabled>Run</button>
             <button class="btn btn-secondary btn-sm" id="skipN4Btn" disabled>Skip</button>
+            <button class="btn btn-secondary btn-sm hidden" id="abortN4Btn">Abort</button>
           </div>
         </div>
       </section>
@@ -97,6 +98,7 @@
           <div class="step-buttons">
             <button class="btn btn-primary btn-sm" id="runDenoiseBtn" disabled>Run</button>
             <button class="btn btn-secondary btn-sm" id="skipDenoiseBtn" disabled>Skip</button>
+            <button class="btn btn-secondary btn-sm hidden" id="abortDenoiseBtn">Abort</button>
           </div>
         </div>
       </section>
@@ -140,6 +142,7 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run
             </button>
+            <button class="btn btn-secondary hidden" id="abortInferenceBtn">Abort</button>
           </div>
         </div>
       </section>
@@ -168,8 +171,11 @@
           <div class="step-buttons">
             <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>Run</button>
             <button class="btn btn-secondary btn-sm" id="skipBETBtn" disabled>Skip</button>
+            <button class="btn btn-secondary btn-sm hidden" id="abortBETBtn">Abort</button>
           </div>
           <div class="step-buttons hidden" id="applyBETGroup">
+            <button class="btn btn-secondary btn-sm" id="dilateBETBtn">Dilate</button>
+            <button class="btn btn-secondary btn-sm" id="erodeBETBtn">Erode</button>
             <button class="btn btn-primary btn-sm" id="applyBETBtn">Apply brain extraction to vessel segmentation</button>
           </div>
         </div>
@@ -198,7 +204,7 @@
         <span class="status-label">Status</span>
         <div class="status-right">
           <span class="status-value" id="statusText">Ready</span>
-          <button class="btn-status-cancel" id="cancelButton" title="Cancel segmentation" disabled>
+          <button class="btn-status-cancel" id="cancelButton" title="Abort current step" disabled>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
