@@ -756,12 +756,14 @@ class VesselBoostApp {
 
   async skipN4() {
     if (this.inferenceExecutor.isRunning()) return;
-    // Remove N4 result and restore viewer to input
+    // Remove N4 result and restore viewer to downsample result or input
     this.inferenceExecutor.removeResult('n4');
     this.inferenceExecutor.skipN4();
-    if (this.inputFile) {
-      await this.viewerController.loadBaseVolume(this.inputFile);
-      this.currentResultTab = 'input';
+    const downsampleResult = this.inferenceExecutor.getResult('downsample');
+    const baseFile = downsampleResult?.file || this.inputFile;
+    if (baseFile) {
+      await this.viewerController.loadBaseVolume(baseFile);
+      this.currentResultTab = downsampleResult?.file ? 'downsample' : 'input';
       this._inputVisible = true;
       this.applyDefaultBaseColormap();
       this.syncWindowControls();
@@ -825,12 +827,13 @@ class VesselBoostApp {
     // Remove denoise result and restore viewer
     this.inferenceExecutor.removeResult('nlm');
     this.inferenceExecutor.skipDenoise();
-    // Reload the latest preprocessing base
+    // Reload the latest preprocessing base (N4 > downsample > input)
     const n4Result = this.inferenceExecutor.getResult('n4');
-    const baseFile = n4Result?.file || this.inputFile;
+    const downsampleResult = this.inferenceExecutor.getResult('downsample');
+    const baseFile = n4Result?.file || downsampleResult?.file || this.inputFile;
     if (baseFile) {
       await this.viewerController.loadBaseVolume(baseFile);
-      this.currentResultTab = n4Result?.file ? 'n4' : 'input';
+      this.currentResultTab = n4Result?.file ? 'n4' : (downsampleResult?.file ? 'downsample' : 'input');
       this._inputVisible = true;
       this.applyDefaultBaseColormap();
       this.syncWindowControls();
@@ -1135,8 +1138,10 @@ class VesselBoostApp {
           // Show segmentation overlay (reverted to previous mask state)
           const segResult = this.inferenceExecutor.getResult('segmentation');
           const segFile = segResult?.file;
-          if (segFile && this.inputFile) {
-            await this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red');
+          const downsampleResult = this.inferenceExecutor.getResult('downsample');
+          const betBaseFile = downsampleResult?.file || this.inputFile;
+          if (segFile && betBaseFile) {
+            await this.viewerController.showResultAsOverlay(betBaseFile, segFile, 'red');
             this._inputVisible = false;
             this.viewerController.setBaseOpacity(0);
             this._segmentationVisible = true;
