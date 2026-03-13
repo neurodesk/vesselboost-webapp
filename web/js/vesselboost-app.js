@@ -730,12 +730,19 @@ class VesselBoostApp {
     await this.inferenceExecutor.downsample(factor);
   }
 
-  skipDownsample() {
+  async skipDownsample() {
     if (this.inferenceExecutor.isRunning()) return;
-    this.updateOutput('Downsample skipped');
-    this.updateStepBadge('downsample', 'skipped');
-    this.setStepEnabled('n4', true);
-    this.setStepButtonsEnabled('n4', true);
+    // Remove downsample result and restore viewer to input
+    this.inferenceExecutor.removeResult('downsample');
+    this.inferenceExecutor.skipDownsample();
+    if (this.inputFile) {
+      await this.viewerController.loadBaseVolume(this.inputFile);
+      this.currentResultTab = 'input';
+      this._inputVisible = true;
+      this.applyDefaultBaseColormap();
+      this.syncWindowControls();
+      this.applyAutoContrast();
+    }
   }
 
   async runN4() {

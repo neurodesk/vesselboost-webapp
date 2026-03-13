@@ -47,6 +47,15 @@ let workerState = {
   segLabelsRAS: null,
   segMinComponentSize: 10,
   // Backups for skip-undo
+  preDownsampleData: null,
+  preDownsampleDims: null,
+  preDownsampleSpacing: null,
+  preDownsampleHeaderBytes: null,
+  preDownsampleOrigDims: null,
+  preDownsampleOrigHeaderBytes: null,
+  preDownsamplePerm: null,
+  preDownsampleFlip: null,
+  preDownsampleIsIdentity: null,
   preN4Data: null,
   preBETMask: null,
   preDenoiseData: null
@@ -68,6 +77,15 @@ function resetState() {
     denoisedData: null,
     segLabelsRAS: null,
     segMinComponentSize: 10,
+    preDownsampleData: null,
+    preDownsampleDims: null,
+    preDownsampleSpacing: null,
+    preDownsampleHeaderBytes: null,
+    preDownsampleOrigDims: null,
+    preDownsampleOrigHeaderBytes: null,
+    preDownsamplePerm: null,
+    preDownsampleFlip: null,
+    preDownsampleIsIdentity: null,
     preN4Data: null,
     preBETMask: null,
     preDenoiseData: null
@@ -1188,6 +1206,17 @@ function stepDownsample(factor) {
   const tgtSpacing = srcSpacing.map(s => s * factor);
   const srcDims = workerState.rasDims;
 
+  // Save pre-downsample state for undo
+  workerState.preDownsampleData = new Float32Array(workerState.rasData);
+  workerState.preDownsampleDims = [...srcDims];
+  workerState.preDownsampleSpacing = [...srcSpacing];
+  workerState.preDownsampleHeaderBytes = workerState.headerBytes.slice(0);
+  workerState.preDownsampleOrigDims = [...workerState.origDims];
+  workerState.preDownsampleOrigHeaderBytes = workerState.origHeaderBytes.slice(0);
+  workerState.preDownsamplePerm = [...workerState.perm];
+  workerState.preDownsampleFlip = [...workerState.flip];
+  workerState.preDownsampleIsIdentity = workerState.isIdentity;
+
   postLog(`Downsampling ${factor}x: spacing ${srcSpacing.map(v => v.toFixed(3)).join('x')}mm -> ${tgtSpacing.map(v => v.toFixed(3)).join('x')}mm`);
   postProgress(0.3, 'Resampling...');
 
@@ -1220,6 +1249,15 @@ function stepDownsample(factor) {
       }
     }
   }
+
+  // Update origDims/origHeaderBytes so inverse transforms map back to
+  // the downsampled space (which is what the viewer displays).
+  // Data is already RAS-oriented, so set identity orientation.
+  workerState.origDims = [...resampled.dims];
+  workerState.origHeaderBytes = workerState.headerBytes.slice(0);
+  workerState.perm = [0, 1, 2];
+  workerState.flip = [false, false, false];
+  workerState.isIdentity = true;
 
   postLog(`Downsampled: ${srcDims.join('x')} -> ${resampled.dims.join('x')}`);
 
@@ -2136,6 +2174,46 @@ self.onmessage = async (e) => {
         console.error('Downsample error:', error);
         postError(error?.message || String(error));
       }
+      break;
+
+    case 'skip-downsample':
+      if (workerState.preDownsampleData) {
+        workerState.rasData = workerState.preDownsampleData;
+        workerState.rasDims = workerState.preDownsampleDims;
+        workerState.rasSpacing = workerState.preDownsampleSpacing;
+        workerState.headerBytes = workerState.preDownsampleHeaderBytes;
+        workerState.origDims = workerState.preDownsampleOrigDims;
+        workerState.origHeaderBytes = workerState.preDownsampleOrigHeaderBytes;
+        workerState.perm = workerState.preDownsamplePerm;
+        workerState.flip = workerState.preDownsampleFlip;
+        workerState.isIdentity = workerState.preDownsampleIsIdentity;
+        workerState.preDownsampleData = null;
+        workerState.preDownsampleDims = null;
+        workerState.preDownsampleSpacing = null;
+        workerState.preDownsampleHeaderBytes = null;
+        workerState.preDownsampleOrigDims = null;
+        workerState.preDownsampleOrigHeaderBytes = null;
+        workerState.preDownsamplePerm = null;
+        workerState.preDownsampleFlip = null;
+        workerState.preDownsampleIsIdentity = null;
+        // Clear downstream state
+        workerState.preN4Data = null;
+        workerState.brainMask = null;
+        workerState.preBETMask = null;
+        workerState.denoisedData = null;
+        workerState.preDenoiseData = null;
+        workerState.segLabelsRAS = null;
+        workerState.segMinComponentSize = 10;
+        postLog('Downsample undone — reverted to original resolution');
+        postVolumeInfo({
+          rasDims: [...workerState.rasDims],
+          rasSpacing: [...workerState.rasSpacing],
+          totalSlices: workerState.rasDims[2]
+        });
+      } else {
+        postLog('Downsample skipped');
+      }
+      postStepComplete('downsample');
       break;
 
     case 'run-n4':

@@ -327,6 +327,12 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'downsample', data: { factor } });
   }
 
+  skipDownsample() {
+    this.stepStatus.downsample = 'skipped';
+    this.running = true;
+    this.worker.postMessage({ type: 'skip-downsample' });
+  }
+
   async runN4() {
     await this.initialize();
     if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'n4') {
