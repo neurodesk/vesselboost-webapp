@@ -1459,24 +1459,20 @@ class VesselBoostApp {
     this.abortUICheckpoint = null;
     if (statusText) statusText.textContent = 'Ready';
 
-    // Show segmentation overlay only (hide base volume to avoid flash)
+    // Show segmentation overlay on top of the input volume
     const fullResult = this.inferenceExecutor.getResult('segmentation');
     const overlayFile = fullResult?.file;
     if (overlayFile) {
-      // Hide base volume first to prevent input image flash
-      this._inputVisible = false;
-      this.viewerController.setBaseOpacity(0);
-
       // Load segmentation as overlay on top of existing base volume
       await this.viewerController.loadOverlay(overlayFile, 'red');
 
-      // Set overlay to full opacity since it's the only visible volume
-      this._overlaySliderValue = 1.0;
-      this.viewerController.setOverlayOpacity(1.0);
+      // Set overlay to 50% so input remains visible underneath
+      this._overlaySliderValue = 0.5;
+      this.viewerController.setOverlayOpacity(0.5);
       const opacitySlider = document.getElementById('overlayOpacity');
-      if (opacitySlider) opacitySlider.value = 1.0;
+      if (opacitySlider) opacitySlider.value = 0.5;
       const opacityDisplay = document.getElementById('overlayOpacityValue');
-      if (opacityDisplay) opacityDisplay.textContent = '100%';
+      if (opacityDisplay) opacityDisplay.textContent = '50%';
       this.syncWindowControls();
     }
   }
