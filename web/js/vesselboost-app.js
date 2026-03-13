@@ -1130,25 +1130,34 @@ class VesselBoostApp {
         break;
       }
       case 'apply-brain-mask': {
-        // Show updated segmentation (with brain mask applied) as overlay
+        // Show brain-extracted image as base with updated segmentation as overlay
+        const betResult = this.inferenceExecutor.getResult('bet');
         const segResult = this.inferenceExecutor.getResult('segmentation');
-        const segFile = segResult?.file;
-        if (segFile && this.inputFile) {
-          await this.viewerController.showResultAsOverlay(this.inputFile, segFile, 'red');
-          this._inputVisible = false;
-          this.viewerController.setBaseOpacity(0);
-          this._segmentationVisible = true;
-          this._overlaySliderValue = 1.0;
-          this.viewerController.setOverlayOpacity(1.0);
-          const opacitySlider = document.getElementById('overlayOpacity');
-          if (opacitySlider) opacitySlider.value = 1.0;
-          const opacityDisplay = document.getElementById('overlayOpacityValue');
-          if (opacityDisplay) opacityDisplay.textContent = '100%';
+        if (betResult?.file) {
+          await this.viewerController.loadBaseVolume(betResult.file);
+          this.currentResultTab = 'bet';
+          this._inputVisible = true;
+          this.applyDefaultBaseColormap();
           this.syncWindowControls();
-          this.rebuildResultsList();
+          this.applyAutoContrast();
+          if (segResult?.file) {
+            await this.viewerController.loadOverlay(segResult.file, 'red', 0.5);
+            this._segmentationVisible = true;
+            this._overlaySliderValue = 0.5;
+            const opacitySlider = document.getElementById('overlayOpacity');
+            if (opacitySlider) opacitySlider.value = 0.5;
+            const opacityDisplay = document.getElementById('overlayOpacityValue');
+            if (opacityDisplay) opacityDisplay.textContent = '50%';
+          }
         }
-        const applyGroupDone = document.getElementById('applyBETGroup');
-        if (applyGroupDone) applyGroupDone.classList.add('hidden');
+        this.rebuildResultsList();
+        // Keep dilation/erosion controls visible for further adjustments
+        const dilateBtn = document.getElementById('dilateBETBtn');
+        if (dilateBtn) dilateBtn.disabled = false;
+        const erodeBtn = document.getElementById('erodeBETBtn');
+        if (erodeBtn) erodeBtn.disabled = false;
+        const applyBtn = document.getElementById('applyBETBtn');
+        if (applyBtn) applyBtn.disabled = false;
         break;
       }
       case 'dilate-brain-mask': {
