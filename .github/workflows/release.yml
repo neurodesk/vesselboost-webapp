@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [ staging ]
   workflow_dispatch:
 
 permissions:
@@ -10,7 +10,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: release-main
+  group: release-staging
   cancel-in-progress: true
 
 jobs:
@@ -84,7 +84,7 @@ jobs:
           fi
 
           git tag "${TAG}"
-          git push origin HEAD:main
+          git push origin HEAD:staging
           git push origin "${TAG}"
 
       - name: Create or update GitHub release
