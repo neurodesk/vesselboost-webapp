@@ -1183,6 +1183,61 @@ function stepLoad(inputData) {
   postStepComplete('load');
 }
 
+function stepDownsample(factor) {
+  const srcSpacing = workerState.rasSpacing;
+  const tgtSpacing = srcSpacing.map(s => s * factor);
+  const srcDims = workerState.rasDims;
+
+  postLog(`Downsampling ${factor}x: spacing ${srcSpacing.map(v => v.toFixed(3)).join('x')}mm -> ${tgtSpacing.map(v => v.toFixed(3)).join('x')}mm`);
+  postProgress(0.3, 'Resampling...');
+
+  const resampled = resampleVolume(workerState.rasData, srcDims, srcSpacing, tgtSpacing);
+  workerState.rasData = resampled.data;
+  workerState.rasDims = resampled.dims;
+  workerState.rasSpacing = resampled.spacing;
+
+  // Update header spacing
+  const hdrView = new DataView(workerState.headerBytes);
+  hdrView.setFloat32(80, resampled.spacing[0], true);
+  hdrView.setFloat32(84, resampled.spacing[1], true);
+  hdrView.setFloat32(88, resampled.spacing[2], true);
+  // Update header dims
+  hdrView.setInt16(42, resampled.dims[0], true);
+  hdrView.setInt16(44, resampled.dims[1], true);
+  hdrView.setInt16(46, resampled.dims[2], true);
+
+  // Update sform origin to account for new spacing
+  const sformCode = hdrView.getInt16(254, true);
+  if (sformCode > 0) {
+    // Update diagonal elements for new spacing (keep signs)
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        const offset = 280 + r * 16 + c * 4;
+        const val = hdrView.getFloat32(offset, true);
+        if (val !== 0) {
+          hdrView.setFloat32(offset, val * factor, true);
+        }
+      }
+    }
+  }
+
+  postLog(`Downsampled: ${srcDims.join('x')} -> ${resampled.dims.join('x')}`);
+
+  // Emit NIfTI for viewer
+  const nifti = createFloat32Nifti(resampled.data, workerState.headerBytes, resampled.dims, resampled.spacing);
+  postStageData('downsample', nifti, `Downsampled ${factor}x`);
+
+  // Emit updated volume info
+  postVolumeInfo({
+    rasDims: [...resampled.dims],
+    rasSpacing: [...resampled.spacing],
+    totalSlices: resampled.dims[2]
+  });
+
+  postProgress(1.0, 'Downsample complete');
+  postStepComplete('downsample');
+}
+
 async function restoreWorkerState(data) {
   resetState();
   loadStateFromInput(data.inputData, { emitUpdates: false });
@@ -2070,6 +2125,15 @@ self.onmessage = async (e) => {
         stepLoad(data.inputData);
       } catch (error) {
         console.error('Load error:', error);
+        postError(error?.message || String(error));
+      }
+      break;
+
+    case 'downsample':
+      try {
+        stepDownsample(data.factor);
+      } catch (error) {
+        console.error('Downsample error:', error);
         postError(error?.message || String(error));
       }
       break;

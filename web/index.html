@@ -61,6 +61,30 @@
         </div>
       </section>
 
+      <!-- Optional: Downsample -->
+      <section class="sidebar-section step-section step-disabled" id="stepDownsampleSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m6 6v-4.8m0 4.8h-4.8"/><path d="M3 3l6 6M3 3v4.8M3 3h4.8"/></svg>
+          <span>Downsample (Optional)</span>
+          <span class="step-badge" id="stepDownsampleBadge"></span>
+        </h2>
+        <div class="section-content">
+          <p class="step-description" id="downsampleInfo">Loading volume info...</p>
+          <div class="param-group">
+            <label class="param-label" for="downsampleFactor">Downsample Factor <span class="info-icon">i<span class="info-tooltip">Reduce the volume resolution by this factor. 2x halves the resolution in each dimension (8x fewer voxels). Useful for large volumes to speed up processing.</span></span></label>
+            <select id="downsampleFactor">
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+            </select>
+          </div>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runDownsampleBtn" disabled>Downsample</button>
+            <button class="btn btn-secondary btn-sm" id="skipDownsampleBtn" disabled>Skip</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Step 1: Bias Field Correction -->
       <section class="sidebar-section step-section step-disabled" id="stepN4Section">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">

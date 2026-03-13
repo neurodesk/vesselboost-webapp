@@ -38,6 +38,7 @@ export class InferenceExecutor {
     // Step status tracking
     this.stepStatus = {
       load: 'pending',
+      downsample: 'pending',
       n4: 'pending',
       bet: 'pending',
       denoise: 'pending',
@@ -319,6 +320,13 @@ export class InferenceExecutor {
     );
   }
 
+  async downsample(factor) {
+    await this.initialize();
+    this.running = true;
+    this.stepStatus.downsample = 'running';
+    this.worker.postMessage({ type: 'downsample', data: { factor } });
+  }
+
   async runN4() {
     await this.initialize();
     if (!this.pendingAbortCheckpoint || this.pendingAbortCheckpoint.step !== 'n4') {
@@ -404,6 +412,7 @@ export class InferenceExecutor {
     this.worker.postMessage({ type: 'reset-state' });
     this.stepStatus = {
       load: 'pending',
+      downsample: 'pending',
       n4: 'pending',
       bet: 'pending',
       denoise: 'pending',

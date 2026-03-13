@@ -144,6 +144,12 @@ class VesselBoostApp {
     this.setupDropZone();
 
     // Step buttons
+    const runDownsample = document.getElementById('runDownsampleBtn');
+    if (runDownsample) runDownsample.addEventListener('click', () => this.runDownsample());
+
+    const skipDownsample = document.getElementById('skipDownsampleBtn');
+    if (skipDownsample) skipDownsample.addEventListener('click', () => this.skipDownsample());
+
     const runN4 = document.getElementById('runN4Btn');
     if (runN4) runN4.addEventListener('click', () => this.runN4());
 
@@ -706,6 +712,32 @@ class VesselBoostApp {
 
   // ==================== Pipeline Step Methods ====================
 
+  updateDownsampleInfo() {
+    const info = this.inferenceExecutor.getVolumeInfo();
+    const el = document.getElementById('downsampleInfo');
+    if (!el || !info) return;
+    const dims = info.rasDims;
+    const spacing = info.rasSpacing;
+    const totalVoxels = dims[0] * dims[1] * dims[2];
+    el.textContent = `Resolution: ${dims[0]}x${dims[1]}x${dims[2]} (${spacing.map(v => v.toFixed(3)).join('x')}mm), ${(totalVoxels / 1e6).toFixed(1)}M voxels`;
+  }
+
+  async runDownsample() {
+    if (this.inferenceExecutor.isRunning()) return;
+    const factorSelect = document.getElementById('downsampleFactor');
+    const factor = factorSelect ? parseInt(factorSelect.value) : 2;
+    this.setStepRunning('downsample');
+    await this.inferenceExecutor.downsample(factor);
+  }
+
+  skipDownsample() {
+    if (this.inferenceExecutor.isRunning()) return;
+    this.updateOutput('Downsample skipped');
+    this.updateStepBadge('downsample', 'skipped');
+    this.setStepEnabled('n4', true);
+    this.setStepButtonsEnabled('n4', true);
+  }
+
   async runN4() {
     if (this.inferenceExecutor.isRunning()) return;
     this.beginAbortableStep('n4');
@@ -849,6 +881,7 @@ class VesselBoostApp {
   getStepSectionId(step) {
     const sectionMap = {
       'load': null,
+      'downsample': 'stepDownsampleSection',
       'n4': 'stepN4Section',
       'bet': 'stepBETSection',
       'denoise': 'stepDenoiseSection',
@@ -859,6 +892,7 @@ class VesselBoostApp {
 
   getStepButtonIds(step) {
     const buttonMap = {
+      'downsample': ['runDownsampleBtn', 'skipDownsampleBtn'],
       'n4': ['runN4Btn', 'skipN4Btn'],
       'bet': ['runBETBtn', 'skipBETBtn'],
       'denoise': ['runDenoiseBtn', 'skipDenoiseBtn'],
@@ -956,6 +990,12 @@ class VesselBoostApp {
   }
 
   resetProcessingInputs() {
+    // Reset downsample
+    const downsampleFactor = document.getElementById('downsampleFactor');
+    if (downsampleFactor) downsampleFactor.value = '2';
+    const downsampleInfo = document.getElementById('downsampleInfo');
+    if (downsampleInfo) downsampleInfo.textContent = 'Loading volume info...';
+
     // Reset BET method to SynthStrip (default)
     const betMethodSelect = document.getElementById('betMethodSelect');
     if (betMethodSelect) {
@@ -1059,6 +1099,11 @@ class VesselBoostApp {
     // Enable next step section
     switch (step) {
       case 'load':
+        this.setStepEnabled('downsample', true);
+        this.setStepButtonsEnabled('downsample', true);
+        this.updateDownsampleInfo();
+        break;
+      case 'downsample':
         this.setStepEnabled('n4', true);
         this.setStepButtonsEnabled('n4', true);
         break;
@@ -1225,12 +1270,13 @@ class VesselBoostApp {
   }
 
   onVolumeInfo(info) {
-    // Volume info received (dims, spacing, etc.)
+    this.updateDownsampleInfo();
   }
 
   updateStepBadge(step, status) {
     const badgeMap = {
       'load': 'stepN4Badge', // load doesn't have its own badge, reusing
+      'downsample': 'stepDownsampleBadge',
       'n4': 'stepN4Badge',
       'bet': 'stepBETBadge',
       'denoise': 'stepDenoiseBadge',
