@@ -61,17 +61,47 @@
         </div>
       </section>
 
+      <!-- Optional: Downsample -->
+      <section class="sidebar-section step-section step-disabled" id="stepDownsampleSection">
+        <h2 class="section-title" onclick="toggleSection(this.parentElement)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m6 6v-4.8m0 4.8h-4.8"/><path d="M3 3l6 6M3 3v4.8M3 3h4.8"/></svg>
+          <span>Downsample (Optional)</span>
+          <span class="step-badge" id="stepDownsampleBadge"></span>
+        </h2>
+        <div class="section-content">
+          <p class="step-description" id="downsampleInfo">Loading volume info...</p>
+          <div class="param-group">
+            <label class="param-label" for="downsampleFactor">Downsample Factor <span class="info-icon">i<span class="info-tooltip">Reduce the volume resolution by this factor. 2x halves the resolution in each dimension (8x fewer voxels). Useful for large volumes to speed up processing.</span></span></label>
+            <select id="downsampleFactor">
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+            </select>
+          </div>
+          <div class="step-buttons">
+            <button class="btn btn-primary btn-sm" id="runDownsampleBtn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
+            <button class="btn btn-secondary btn-sm" id="skipDownsampleBtn" disabled>Skip</button>
+          </div>
+        </div>
+      </section>
+
       <!-- Step 1: Bias Field Correction -->
       <section class="sidebar-section step-section step-disabled" id="stepN4Section">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-          <span>Step 1: Bias Field Correction</span>
+          <span>Step 1: Bias Field Correction (Optional)</span>
           <span class="step-badge" id="stepN4Badge"></span>
         </h2>
         <div class="section-content">
           <p class="step-description">N4ITK bias field correction. Recommended for raw MRI data.</p>
           <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="runN4Btn" disabled>Run</button>
+            <button class="btn btn-primary btn-sm" id="runN4Btn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
             <button class="btn btn-secondary btn-sm" id="skipN4Btn" disabled>Skip</button>
             <button class="btn btn-secondary btn-sm hidden" id="abortN4Btn">Abort</button>
           </div>
@@ -82,7 +112,7 @@
       <section class="sidebar-section step-section step-disabled" id="stepDenoiseSection">
         <h2 class="section-title" onclick="toggleSection(this.parentElement)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446A9 9 0 1 1 12 3z"/></svg>
-          <span>Step 2: Denoising</span>
+          <span>Step 2: Denoising (Optional)</span>
           <span class="step-badge" id="stepDenoiseBadge"></span>
         </h2>
         <div class="section-content">
@@ -96,7 +126,10 @@
             </select>
           </div>
           <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="runDenoiseBtn" disabled>Run</button>
+            <button class="btn btn-primary btn-sm" id="runDenoiseBtn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
             <button class="btn btn-secondary btn-sm" id="skipDenoiseBtn" disabled>Skip</button>
             <button class="btn btn-secondary btn-sm hidden" id="abortDenoiseBtn">Abort</button>
           </div>
@@ -169,7 +202,10 @@
             <input type="number" id="betFiInput" value="0.5" min="0.0" max="1.0" step="0.05">
           </div>
           <div class="step-buttons">
-            <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>Run</button>
+            <button class="btn btn-primary btn-sm" id="runBETBtn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run
+            </button>
             <button class="btn btn-secondary btn-sm" id="skipBETBtn" disabled>Skip</button>
             <button class="btn btn-secondary btn-sm hidden" id="abortBETBtn">Abort</button>
           </div>
@@ -473,7 +509,7 @@ function toggleSection(section) {
 <script src="coi-serviceworker.js"></script>
 
 <!-- NiiVue -->
-<script src="https://unpkg.com/@niivue/niivue@0.44.0/dist/niivue.umd.js"></script>
+<script src="https://unpkg.com/@niivue/niivue@0.68.1/dist/niivue.umd.js"></script>
 
 <!-- Main app -->
 <script type="module" src="js/vesselboost-app.js"></script>

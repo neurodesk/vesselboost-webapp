@@ -1,4 +1,4 @@
-export const VERSION = '2.0.81';
+export const VERSION = '2.0.94';
 
 // Model - relative path (served from same origin)
 export const MODEL_BASE_URL = './models';
@@ -89,6 +89,7 @@ export const PROGRESS_CONFIG = {
 
 export const STAGE_NAMES = {
   'input': 'Input',
+  'downsample': 'Downsample',
   'bet': 'Brain Extraction',
   'n4': 'Bias Correction',
   'nlm': 'Denoising',
@@ -106,6 +107,6 @@ export const CACHE_CONFIG = {
   maxSizeMB: 500
 };
 
-export const PIPELINE_STEPS = ['load', 'n4', 'denoise', 'inference', 'bet'];
+export const PIPELINE_STEPS = ['load', 'downsample', 'n4', 'denoise', 'inference', 'bet'];
 
 if (typeof self !== 'undefined') self.VesselBoostConfig = { VERSION, MODEL_BASE_URL, MODEL, MODELS, SYNTHSTRIP_MODEL, SYNTHSTRIP_FAST_MODEL, INFERENCE_DEFAULTS, VIEWER_CONFIG, PROGRESS_CONFIG, STAGE_NAMES, ONNX_CONFIG, CACHE_CONFIG, PIPELINE_STEPS };
