@@ -1477,11 +1477,10 @@ class VesselBoostApp {
     this.applyAutoContrast();
 
     // Re-add segmentation overlay if it exists and is visible
-    // (skip for input — segmentation is in the downsampled space and won't align)
-    if (this._segmentationVisible && stage !== 'input') {
+    if (this._segmentationVisible) {
       const segResult = this.inferenceExecutor.getResult('segmentation');
       if (segResult?.file) {
-        await this.viewerController.loadOverlay(segResult.file, 'red');
+        await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
       }
     }
 
@@ -1508,20 +1507,10 @@ class VesselBoostApp {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
     if (visible) {
-      // Segmentation is in the downsampled space — if the current base is "input",
-      // switch to the downsample result so they align correctly.
-      if (this.currentResultTab === 'input') {
-        const downsampleResult = this.inferenceExecutor.getResult('downsample');
-        if (downsampleResult?.file) {
-          await this.viewStage('downsample');
-        }
-      }
-      // If overlay is not loaded (e.g. base volume was reloaded), load it first
+      // Always reload the overlay to ensure it's present and aligned with the current base
       const segResult = this.inferenceExecutor.getResult('segmentation');
-      if (segResult?.file && !this.viewerController.currentOverlayFile) {
+      if (segResult?.file) {
         await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
-      } else {
-        this.viewerController.setOverlayOpacity(this._overlaySliderValue);
       }
       if (opacitySlider) opacitySlider.disabled = false;
     } else {
