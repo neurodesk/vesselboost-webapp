@@ -1424,8 +1424,17 @@ class VesselBoostApp {
           viewBtn.classList.toggle('active', this._segmentationVisible);
         });
       } else {
-        // Base volume stages: load as base volume
-        viewBtn.addEventListener('click', () => this.viewStage(stage));
+        // Base volume stages: toggle load/unload as base volume
+        viewBtn.addEventListener('click', () => {
+          if (this.currentResultTab === stage && this._inputVisible) {
+            // Already showing this stage — hide it
+            this._inputVisible = false;
+            this.viewerController.setBaseOpacity(0);
+            viewBtn.classList.remove('active');
+          } else {
+            this.viewStage(stage);
+          }
+        });
       }
       row.appendChild(viewBtn);
 
