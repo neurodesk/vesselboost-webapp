@@ -1403,7 +1403,7 @@ class VesselBoostApp {
     const viewSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
     // Build all rows with uniform layout: eye icon + label + download button
-    const allStages = ['input', ...stages];
+    const allStages = [...stages];
 
     for (const stage of allStages) {
       const row = document.createElement('div');
@@ -1460,34 +1460,30 @@ class VesselBoostApp {
   }
 
   async viewStage(stage) {
-    let file;
-    if (stage === 'input') {
-      file = this.inputFile;
-    } else {
-      const result = this.inferenceExecutor.getResult(stage);
-      file = result?.file;
-    }
+    const result = this.inferenceExecutor.getResult(stage);
+    const file = result?.file;
     if (!file) return;
 
-    // Load base + segmentation overlay together to ensure proper alignment
-    const segResult = this._segmentationVisible ? this.inferenceExecutor.getResult('segmentation') : null;
-    if (segResult?.file) {
-      await this.viewerController.loadBaseWithOverlay(file, segResult.file, 'red', this._overlaySliderValue);
-    } else {
-      await this.viewerController.loadBaseVolume(file);
-    }
+    await this.viewerController.loadBaseVolume(file);
     this.currentResultTab = stage;
     this._inputVisible = true;
     this.applyDefaultBaseColormap();
     this.syncWindowControls();
     this.applyAutoContrast();
 
+    // Re-add segmentation overlay if it exists and is visible
+    if (this._segmentationVisible) {
+      const segResult = this.inferenceExecutor.getResult('segmentation');
+      if (segResult?.file) {
+        await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
+      }
+    }
+
     // Update active state on view buttons
     const container = document.getElementById('stageButtons');
     if (container) {
       container.querySelectorAll('.view-btn').forEach(btn => {
         if (btn.dataset.stage === 'segmentation') {
-          // Segmentation eye reflects overlay visibility, not base selection
           btn.classList.toggle('active', this._segmentationVisible);
         } else {
           btn.classList.toggle('active', btn.dataset.stage === stage);
@@ -1501,42 +1497,17 @@ class VesselBoostApp {
     this.viewerController.setBaseOpacity(visible ? 1 : 0);
   }
 
-  async toggleOverlayVisibility(visible) {
+  toggleOverlayVisibility(visible) {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
     if (visible) {
-      // Reload base + overlay together to ensure proper spatial alignment
-      const segResult = this.inferenceExecutor.getResult('segmentation');
-      const baseFile = this._getCurrentBaseFile();
-      if (segResult?.file && baseFile) {
-        await this.viewerController.loadBaseWithOverlay(baseFile, segResult.file, 'red', this._overlaySliderValue);
-        this.applyDefaultBaseColormap();
-        this.syncWindowControls();
-        this.applyAutoContrast();
-      }
+      this.viewerController.setOverlayOpacity(this._overlaySliderValue);
       if (opacitySlider) opacitySlider.disabled = false;
     } else {
-      // Reload just the base to reliably remove the overlay
-      const baseFile = this._getCurrentBaseFile();
-      if (baseFile) {
-        await this.viewerController.loadBaseVolume(baseFile);
-        this.applyDefaultBaseColormap();
-        this.syncWindowControls();
-        this.applyAutoContrast();
-        // Restore hidden state if base was toggled off
-        if (!this._inputVisible) {
-          this.viewerController.setBaseOpacity(0);
-        }
-      }
+      this.viewerController.setOverlayOpacity(0);
       if (opacitySlider) opacitySlider.disabled = true;
     }
     this.updateViewerInfo(this._lastLocationData);
-  }
-
-  _getCurrentBaseFile() {
-    if (this.currentResultTab === 'input') return this.inputFile;
-    const result = this.inferenceExecutor.getResult(this.currentResultTab);
-    return result?.file || this.inputFile;
   }
 
   onWorkerInitialized() {

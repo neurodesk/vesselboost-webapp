@@ -63,26 +63,6 @@ export class ViewerController {
     }
   }
 
-  async loadBaseWithOverlay(baseFile, overlayFile, colormap = 'red', opacity = 0.5) {
-    try {
-      this.updateOutput(`Loading ${baseFile.name}...`);
-      const baseUrl = URL.createObjectURL(baseFile);
-      const overlayUrl = URL.createObjectURL(overlayFile);
-      await this.nv.loadVolumes([
-        { url: baseUrl, name: baseFile.name },
-        { url: overlayUrl, name: overlayFile.name, colormap: colormap, cal_min: 0, cal_max: 1, opacity: opacity }
-      ]);
-      URL.revokeObjectURL(baseUrl);
-      URL.revokeObjectURL(overlayUrl);
-      this.currentBaseFile = baseFile;
-      this.currentOverlayFile = overlayFile;
-      this.updateOutput(`${baseFile.name} loaded`);
-    } catch (error) {
-      this.updateOutput(`Error loading volumes: ${error.message}`);
-      console.error(error);
-    }
-  }
-
   async showResultAsOverlay(baseFile, overlayFile, colormap = 'vesselboost') {
     await this.loadBaseVolume(baseFile);
     if (overlayFile) {
