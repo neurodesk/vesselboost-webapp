@@ -1469,20 +1469,18 @@ class VesselBoostApp {
     }
     if (!file) return;
 
-    await this.viewerController.loadBaseVolume(file);
+    // Load base + segmentation overlay together to ensure proper alignment
+    const segResult = this._segmentationVisible ? this.inferenceExecutor.getResult('segmentation') : null;
+    if (segResult?.file) {
+      await this.viewerController.loadBaseWithOverlay(file, segResult.file, 'red', this._overlaySliderValue);
+    } else {
+      await this.viewerController.loadBaseVolume(file);
+    }
     this.currentResultTab = stage;
     this._inputVisible = true;
     this.applyDefaultBaseColormap();
     this.syncWindowControls();
     this.applyAutoContrast();
-
-    // Re-add segmentation overlay if it exists and is visible
-    if (this._segmentationVisible) {
-      const segResult = this.inferenceExecutor.getResult('segmentation');
-      if (segResult?.file) {
-        await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
-      }
-    }
 
     // Update active state on view buttons
     const container = document.getElementById('stageButtons');
@@ -1507,17 +1505,38 @@ class VesselBoostApp {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
     if (visible) {
-      // Always reload the overlay to ensure it's present and aligned with the current base
+      // Reload base + overlay together to ensure proper spatial alignment
       const segResult = this.inferenceExecutor.getResult('segmentation');
-      if (segResult?.file) {
-        await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
+      const baseFile = this._getCurrentBaseFile();
+      if (segResult?.file && baseFile) {
+        await this.viewerController.loadBaseWithOverlay(baseFile, segResult.file, 'red', this._overlaySliderValue);
+        this.applyDefaultBaseColormap();
+        this.syncWindowControls();
+        this.applyAutoContrast();
       }
       if (opacitySlider) opacitySlider.disabled = false;
     } else {
-      this.viewerController.setOverlayOpacity(0);
+      // Reload just the base to reliably remove the overlay
+      const baseFile = this._getCurrentBaseFile();
+      if (baseFile) {
+        await this.viewerController.loadBaseVolume(baseFile);
+        this.applyDefaultBaseColormap();
+        this.syncWindowControls();
+        this.applyAutoContrast();
+        // Restore hidden state if base was toggled off
+        if (!this._inputVisible) {
+          this.viewerController.setBaseOpacity(0);
+        }
+      }
       if (opacitySlider) opacitySlider.disabled = true;
     }
     this.updateViewerInfo(this._lastLocationData);
+  }
+
+  _getCurrentBaseFile() {
+    if (this.currentResultTab === 'input') return this.inputFile;
+    const result = this.inferenceExecutor.getResult(this.currentResultTab);
+    return result?.file || this.inputFile;
   }
 
   onWorkerInitialized() {
