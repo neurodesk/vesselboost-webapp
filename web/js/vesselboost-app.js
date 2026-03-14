@@ -1477,7 +1477,8 @@ class VesselBoostApp {
     this.applyAutoContrast();
 
     // Re-add segmentation overlay if it exists and is visible
-    if (this._segmentationVisible) {
+    // (skip for input — segmentation is in the downsampled space and won't align)
+    if (this._segmentationVisible && stage !== 'input') {
       const segResult = this.inferenceExecutor.getResult('segmentation');
       if (segResult?.file) {
         await this.viewerController.loadOverlay(segResult.file, 'red');
@@ -1507,6 +1508,14 @@ class VesselBoostApp {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
     if (visible) {
+      // Segmentation is in the downsampled space — if the current base is "input",
+      // switch to the downsample result so they align correctly.
+      if (this.currentResultTab === 'input') {
+        const downsampleResult = this.inferenceExecutor.getResult('downsample');
+        if (downsampleResult?.file) {
+          await this.viewStage('downsample');
+        }
+      }
       // If overlay is not loaded (e.g. base volume was reloaded), load it first
       const segResult = this.inferenceExecutor.getResult('segmentation');
       if (segResult?.file && !this.viewerController.currentOverlayFile) {
