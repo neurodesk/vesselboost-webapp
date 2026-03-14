@@ -1424,6 +1424,8 @@ class VesselBoostApp {
           viewBtn.classList.toggle('active', this._segmentationVisible);
         });
       } else {
+        // Initialize active state based on what's currently displayed
+        viewBtn.classList.toggle('active', this.currentResultTab === stage && this._inputVisible);
         // Base volume stages: toggle load/unload as base volume
         viewBtn.addEventListener('click', () => {
           if (this.currentResultTab === stage && this._inputVisible) {
