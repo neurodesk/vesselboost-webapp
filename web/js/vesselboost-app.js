@@ -1503,11 +1503,17 @@ class VesselBoostApp {
     this.viewerController.setBaseOpacity(visible ? 1 : 0);
   }
 
-  toggleOverlayVisibility(visible) {
+  async toggleOverlayVisibility(visible) {
     this._segmentationVisible = visible;
     const opacitySlider = document.getElementById('overlayOpacity');
     if (visible) {
-      this.viewerController.setOverlayOpacity(this._overlaySliderValue);
+      // If overlay is not loaded (e.g. base volume was reloaded), load it first
+      const segResult = this.inferenceExecutor.getResult('segmentation');
+      if (segResult?.file && !this.viewerController.currentOverlayFile) {
+        await this.viewerController.loadOverlay(segResult.file, 'red', this._overlaySliderValue);
+      } else {
+        this.viewerController.setOverlayOpacity(this._overlaySliderValue);
+      }
       if (opacitySlider) opacitySlider.disabled = false;
     } else {
       this.viewerController.setOverlayOpacity(0);
