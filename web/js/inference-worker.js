@@ -1364,7 +1364,17 @@ function stepN4() {
   workerState.rasData = corrected;
   postLog('Bias field correction complete');
 
-  const n4Nifti = createFloat32Nifti(new Float32Array(corrected), headerBytes, rasDims, rasSpacing);
+  // Emit N4 result in the same display space as segmentation/output files.
+  // This avoids overlay misalignment when RAS != original orientation.
+  let n4Display = new Float32Array(corrected);
+  let n4Header = headerBytes;
+  let n4Dims = rasDims;
+  if (!workerState.isIdentity) {
+    n4Display = inverseOrientFloat32(n4Display, rasDims, workerState.perm, workerState.flip, workerState.origDims);
+    n4Header = workerState.origHeaderBytes;
+    n4Dims = workerState.origDims;
+  }
+  const n4Nifti = createFloat32Nifti(n4Display, n4Header, n4Dims);
   postStageData('n4', n4Nifti, 'Bias field correction (N4ITK)');
 
   // Clear downstream state (BET + downstream invalidated)
@@ -1905,12 +1915,17 @@ function stepDenoise(params) {
   workerState.segMinComponentSize = 10;
   postLog('Denoising complete');
 
-  const nlmNifti = createFloat32Nifti(
-    new Float32Array(denoised),
-    headerBytes,
-    rasDims,
-    rasSpacing
-  );
+  // Emit denoise result in the same display space as segmentation/output files.
+  // This avoids overlay misalignment when RAS != original orientation.
+  let nlmDisplay = new Float32Array(denoised);
+  let nlmHeader = headerBytes;
+  let nlmDims = rasDims;
+  if (!workerState.isIdentity) {
+    nlmDisplay = inverseOrientFloat32(nlmDisplay, rasDims, workerState.perm, workerState.flip, workerState.origDims);
+    nlmHeader = workerState.origHeaderBytes;
+    nlmDims = workerState.origDims;
+  }
+  const nlmNifti = createFloat32Nifti(nlmDisplay, nlmHeader, nlmDims);
   postStageData('nlm', nlmNifti, `Denoising (${methodLabel})`);
 
   emitDenoiseStateArtifact();
