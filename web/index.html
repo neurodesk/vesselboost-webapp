@@ -5,7 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VesselBoost - Blood Vessel Segmentation</title>
   <link rel="stylesheet" href="css/styles.css">
-  <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "a88bfdb1019b4c479180408cf15a79df"}'></script><!-- End Cloudflare Web Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-4Z9774J59Y"></script>
+  <script>
+    var doNotTrack = false;
+    var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+    doNotTrack = dnt == "1" || dnt == "yes";
+    if (!doNotTrack) {
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-4Z9774J59Y');
+    }
+  </script>
 </head>
 <body>
 
@@ -480,7 +491,7 @@
       <p>VesselBoost uses ONNX Runtime Web to run deep learning models directly in the browser via WebAssembly. Your NIfTI or DICOM files are read into browser memory, processed locally, and results are displayed without network transfer of patient data.</p>
 
       <h4>Third-party services</h4>
-      <p>Static app files and public model assets may be served from external hosting, but patient-derived files are not sent to those services by the analysis code. Cloudflare Web Analytics collects aggregate page usage and performance metrics without patient images, voxel values, screenshots, generated outputs, filenames, or analysis results.</p>
+      <p>Static app files and public model assets may be served from external hosting, but patient-derived files are not sent to those services by the analysis code. Google Analytics collects page usage metrics without patient images, voxel values, screenshots, generated outputs, filenames, or analysis results. Analytics tracking is disabled when your browser sends a Do Not Track value of "1" or "yes".</p>
     </div>
   </div>
 </div>

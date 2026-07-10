@@ -1,7 +1,8 @@
 {
   "scripts": {
     "lint": "node scripts/check-syntax.mjs",
-    "test": "npm run lint && npm run test:spatial-file && npm run test:pipeline-graph && npm run test:viewer-controller && npm run test:result-display && npm run test:n4-shrink-policy",
+    "test": "npm run lint && npm run test:analytics && npm run test:spatial-file && npm run test:pipeline-graph && npm run test:viewer-controller && npm run test:result-display && npm run test:n4-shrink-policy",
+    "test:analytics": "node --no-warnings scripts/test_analytics.mjs",
     "test:spatial-file": "node --no-warnings scripts/test_spatial_file.mjs",
     "test:pipeline-graph": "node --no-warnings scripts/test_pipeline_graph.mjs",
     "test:viewer-controller": "node --no-warnings scripts/test_viewer_controller.mjs",
