@@ -1,8 +1,16 @@
 # VesselBoost Web App
 
+> [!IMPORTANT]
+> Webapp development has moved to [neurodesk/webapps](https://github.com/neurodesk/webapps).
+> The current source is [`apps/vesselboost`](https://github.com/neurodesk/webapps/tree/main/apps/vesselboost).
+> Submit all new webapp code and pull requests to that monorepo, and report bugs or request features in
+> [its issue tracker](https://github.com/neurodesk/webapps/issues).
+> This standalone repository preserves historical source and instructions.
+> Follow the [monorepo development and deployment guide](https://github.com/neurodesk/webapps#development) for current work.
+
 Browser-based blood vessel segmentation using the [VesselBoost](https://github.com/KMarshallX/VesselBoost/) 3D UNet model. All processing runs entirely client-side using ONNX Runtime Web.
 
-## Quick Start
+## Quick Start (historical standalone instructions)
 
 ```bash
 # 1. Download ONNX Runtime WASM files
@@ -29,7 +37,7 @@ bash run.sh
 - **Smart auto-contrast**: percentile-based windowing for better default display
 - **Privacy**: all processing happens locally in the browser
 
-## Model Weights
+## Model Weights (historical standalone instructions)
 
 The default model (`manual_0429`) is extracted from the VesselBoost 2.0.0 Docker container. This is the recommended model for TOF MRA vessel segmentation.
 
@@ -62,7 +70,7 @@ docker run --rm -v $(pwd)/.tmp_weights:/weights vnmd/vesselboost_2.0.0 \
 python scripts/convert_model.py --checkpoint .tmp_weights/vesselboost_weights.pth
 ```
 
-## Rust Preprocessing (Optional)
+## Rust Preprocessing (Optional) (historical standalone instructions)
 
 The N4ITK bias field correction, BET brain extraction (traditional), and NLM denoising run as Rust compiled to WASM. SynthStrip brain extraction uses ONNX Runtime and does not require WASM.
 
@@ -113,7 +121,7 @@ vesselboost-webapp/
 12. Remove small connected components
 13. Inverse orient -> output NIfTI
 
-## Linting
+## Linting (historical standalone instructions)
 
 A syntax checker runs during release validation to catch JS errors (e.g. `await` in non-async functions) before tagging a production release. You can run it locally:
 
@@ -124,7 +132,7 @@ npm run lint
 
 This parses all JS files under `web/` using [acorn](https://github.com/acornjs/acorn) and reports any syntax errors with file, line, and column.
 
-## Validation
+## Validation (historical standalone instructions)
 
 Compare the web app output against the Python VesselBoost pipeline:
 
